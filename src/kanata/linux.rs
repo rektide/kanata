@@ -4,7 +4,7 @@
 )]
 
 use anyhow::{Result, anyhow, bail};
-use evdev::{EventSummary, InputEvent, RelativeAxisCode};
+use evdev::{EventSummary, EventType, InputEvent, RelativeAxisCode};
 use log::info;
 use parking_lot::Mutex;
 use std::convert::TryFrom;
@@ -22,6 +22,7 @@ impl Kanata {
         let k = kanata.lock();
         let allow_hardware_repeat = k.allow_hardware_repeat;
         let mouse_movement_key = k.mouse_movement_key.clone();
+        let mouse_axis_map = k.mouse_axis_map.clone();
         let mut kbd_in = match KbdIn::new(
             &k.kbd_in_paths,
             k.continue_if_no_devices,
@@ -54,19 +55,32 @@ impl Kanata {
                     }
                 }
 
-                let key_event = match KeyEvent::try_from(in_event) {
+                let mut key_event = match KeyEvent::try_from(in_event) {
                     Ok(ev) => ev,
                     _ => {
                         // Pass-through non-key and non-scroll events
                         let mut kanata = kanata.lock();
                         #[cfg(not(feature = "simulated_output"))]
-                        kanata
-                            .kbd_out
-                            .write_raw(in_event)
-                            .map_err(|e| anyhow!("failed write: {}", e))?;
+                        for out_ev in map_raw_mouse_movement(&mouse_axis_map, in_event)
+                            .into_iter()
+                            .flatten()
+                        {
+                            kanata
+                                .kbd_out
+                                .write_raw(out_ev)
+                                .map_err(|e| anyhow!("failed write: {}", e))?;
+                        }
                         continue;
                     }
                 };
+
+                // Scroll events are the only Tap-valued events; apply the
+                // configured wheel axis mapping before any mapping checks so
+                // that both remapped keys and re-emitted scroll output see
+                // the mapped wheel direction.
+                if key_event.value == KeyValue::Tap {
+                    key_event.code = mouse_axis_map.lock().map_wheel_code(key_event.code);
+                }
 
                 check_for_exit(&key_event);
 
@@ -146,6 +160,30 @@ impl Kanata {
         }
         Ok(())
     }
+}
+
+/// Rewrite a relative pointer movement event according to the configured
+/// mouse axis mapping. A movement event carries a delta on one axis, so the
+/// mapped result may be empty (discarded input axis), the original event
+/// (unmapped), or an event on either output axis.
+fn map_raw_mouse_movement(
+    mouse_axis_map: &Mutex<MouseAxisMap>,
+    ev: InputEvent,
+) -> [Option<InputEvent>; 2] {
+    let (dx, dy) = match ev.destructure() {
+        EventSummary::RelativeAxis(_, RelativeAxisCode::REL_X, value) => (value, 0),
+        EventSummary::RelativeAxis(_, RelativeAxisCode::REL_Y, value) => (0, value),
+        _ => return [Some(ev), None],
+    };
+    let map = mouse_axis_map.lock();
+    if !map.maps_movement() {
+        return [Some(ev), None];
+    }
+    let (ox, oy) = map.map_movement(dx, dy);
+    [
+        (ox != 0).then(|| InputEvent::new(EventType::RELATIVE.0, RelativeAxisCode::REL_X.0, ox)),
+        (oy != 0).then(|| InputEvent::new(EventType::RELATIVE.0, RelativeAxisCode::REL_Y.0, oy)),
+    ]
 }
 
 /// Returns true if the scroll event should be sent to the processing loop, otherwise returns

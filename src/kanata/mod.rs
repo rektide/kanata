@@ -80,6 +80,7 @@ use kanata_parser::cfg;
 use kanata_parser::cfg::list_actions::*;
 use kanata_parser::cfg::*;
 use kanata_parser::custom_action::*;
+use kanata_parser::mouse_axis::MouseAxisMap;
 pub use kanata_parser::keys::*;
 use kanata_tcp_protocol::ServerMessage;
 
@@ -347,6 +348,11 @@ pub struct Kanata {
         target_os = "unknown"
     ))]
     pub(crate) mouse_movement_key: Arc<Mutex<Option<OsCode>>>,
+    /// Physical mouse axis mapping (defcfg `mouse-x-map` / `mouse-y-map` /
+    /// `mouse-wheel-v-map` / `mouse-wheel-h-map`). Shared with the OS input
+    /// loops so live reload updates the transform they apply to passed-
+    /// through mouse movement and wheel events.
+    pub(crate) mouse_axis_map: Arc<Mutex<MouseAxisMap>>,
     /// Whether the loaded config outputs mouse buttons. Gates installing the
     /// macOS mouse event tap (for drag-assist) so configs that never emit mouse
     /// buttons do not request the extra Accessibility / Input Monitoring
@@ -375,6 +381,20 @@ impl From<MoveDirection> for Axis {
         }
     }
 }
+
+/// macOS does not implement physical mouse axis mapping yet; make that loud
+/// instead of silently ignoring the configuration.
+#[cfg(target_os = "macos")]
+fn warn_unsupported_mouse_axis_map(map: &MouseAxisMap) {
+    if !map.is_identity() {
+        log::warn!(
+            "mouse axis mapping (mouse-x-map/mouse-y-map/mouse-wheel-v-map/mouse-wheel-h-map) \
+             is not implemented on macOS yet; the configuration is ignored"
+        );
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn warn_unsupported_mouse_axis_map(_map: &MouseAxisMap) {}
 
 /// Represents reload actions that need to be processed after releasing borrows
 enum ReloadAction {
@@ -424,6 +444,7 @@ impl Kanata {
                 bail!("failed to parse file");
             }
         };
+        warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
 
         let kbd_out = match KbdOut::new(
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -586,6 +607,7 @@ impl Kanata {
                 target_os = "unknown"
             ))]
             mouse_movement_key: Arc::new(Mutex::new(cfg.options.mouse_movement_key)),
+            mouse_axis_map: Arc::new(Mutex::new(cfg.options.mouse_axis_map)),
             #[cfg(target_os = "macos")]
             emits_mouse_buttons: Arc::new(Mutex::new(cfg.emits_mouse_buttons)),
             #[cfg(feature = "tcp_server")]
@@ -607,6 +629,7 @@ impl Kanata {
                 bail!("{e:?}");
             }
         };
+        warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
 
         let kbd_out = match KbdOut::new(
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -748,6 +771,7 @@ impl Kanata {
                 target_os = "unknown"
             ))]
             mouse_movement_key: Arc::new(Mutex::new(cfg.options.mouse_movement_key)),
+            mouse_axis_map: Arc::new(Mutex::new(cfg.options.mouse_axis_map)),
             #[cfg(target_os = "macos")]
             emits_mouse_buttons: Arc::new(Mutex::new(cfg.emits_mouse_buttons)),
             #[cfg(feature = "tcp_server")]
@@ -904,9 +928,18 @@ impl Kanata {
                         "defcfg option mouse-movement-key will not take effect until kanata is restarted!"
                     );
                 }
+                if !self.mouse_axis_map.lock().maps_movement()
+                    && cfg.options.mouse_axis_map.maps_movement()
+                {
+                    log::warn!(
+                        "defcfg option mouse-x-map/mouse-y-map movement remapping will not take effect until kanata is restarted!"
+                    );
+                }
             }
 
             *self.mouse_movement_key.lock() = cfg.options.mouse_movement_key;
+            *self.mouse_axis_map.lock() = cfg.options.mouse_axis_map;
+            warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
 
             // Refresh the mouse-button-output flag so the reload install gate
             // (below) sees whether the new config emits mouse buttons. The tap
