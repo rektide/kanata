@@ -4,6 +4,7 @@ pub mod cfg;
 pub mod custom_action;
 pub mod gamepad;
 pub mod keys;
+pub mod mouse_axis;
 pub mod layers;
 pub mod lsp_hints;
 pub mod sequences;

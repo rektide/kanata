@@ -2348,6 +2348,110 @@ fn parse_mouse_movement_key() {
     );
 }
 
+/// `mouse-*-map` options parse a signed-permutation axis map: the rotating-
+/// trackpad use case from jtroo/kanata#2192 is x ← y, y ← -x.
+#[test]
+fn parse_mouse_axis_map_rotation() {
+    let source = "
+(defcfg
+  mouse-x-map y
+  mouse-y-map -x
+  mouse-wheel-v-map -v
+  mouse-wheel-h-map h
+)
+(defsrc)
+(deflayer base)
+";
+    let icfg = parse_cfg(source).expect("parses");
+    use crate::mouse_axis::*;
+    assert_eq!(
+        icfg.options.mouse_axis_map,
+        MouseAxisMap {
+            movement_x: MovementSource {
+                axis: MovementAxis::Y,
+                invert: false
+            },
+            movement_y: MovementSource {
+                axis: MovementAxis::X,
+                invert: true
+            },
+            wheel_v: WheelSource {
+                axis: WheelAxis::V,
+                invert: true
+            },
+            wheel_h: WheelSource::H,
+        },
+    );
+    assert!(icfg.options.mouse_axis_map.maps_movement());
+    assert!(icfg.options.mouse_axis_map.maps_wheel());
+}
+
+#[test]
+fn parse_mouse_axis_map_defaults_to_identity() {
+    let source = "
+(defcfg)
+(defsrc)
+(deflayer base)
+";
+    let icfg = parse_cfg(source).expect("parses");
+    assert_eq!(icfg.options.mouse_axis_map, Default::default());
+}
+
+#[test]
+fn parse_mouse_axis_map_rejects_bad_values() {
+    for (label, bad) in [
+        ("mouse-x-map", "z"),
+        ("mouse-y-map", "-v"),
+        ("mouse-wheel-v-map", "x"),
+        ("mouse-wheel-h-map", "up"),
+    ] {
+        let source = format!(
+            "
+(defcfg
+  {label} {bad}
+)
+(defsrc)
+(deflayer base)
+"
+        );
+        let res = parse_cfg(&source);
+        assert!(res.is_err(), "{label} {bad} should not parse");
+    }
+}
+
+#[test]
+fn parse_mouse_axis_map_rejects_non_permutation_wheels() {
+    // Both wheel outputs drawing from the same input axis cannot be
+    // expressed as single wheel key codes.
+    let source = "
+(defcfg
+  mouse-wheel-v-map h
+  mouse-wheel-h-map -h
+)
+(defsrc)
+(deflayer base)
+";
+    let res = parse_cfg(source);
+    assert!(res.is_err());
+}
+
+#[test]
+fn parse_mouse_axis_map_allows_same_axis_movement_sources() {
+    // Movement may draw both outputs from one input axis (discarding the
+    // other); only wheels must stay permutations.
+    let source = "
+(defcfg
+  mouse-x-map -x
+  mouse-y-map -x
+)
+(defsrc)
+(deflayer base)
+";
+    let icfg = parse_cfg(source).expect("parses");
+    assert!(icfg.options.mouse_axis_map.maps_movement());
+    assert!(!icfg.options.mouse_axis_map.maps_wheel());
+}
+
 /// Regression guard for the hwid length fencepost in `sexpr_to_hwids_vec`.
 ///
 /// Bytes parsed from a hwid are packed into a fixed `[u8; HWID_ARR_SZ]` array.

@@ -4,6 +4,7 @@ use super::{TrimAtomQuotes, error::*};
 use crate::cfg::check_first_expr;
 use crate::custom_action::*;
 use crate::keys::*;
+use crate::mouse_axis::*;
 #[allow(unused)]
 use crate::{anyhow_expr, anyhow_span, bail, bail_expr, bail_span};
 
@@ -157,6 +158,9 @@ pub struct CfgOptions {
     pub trans_resolution_behavior_v2: bool,
     pub chords_v2_min_idle: u16,
     pub tap_hold_require_prior_idle: u16,
+    /// Physical mouse axis mapping (`mouse-x-map` / `mouse-y-map` /
+    /// `mouse-wheel-v-map` / `mouse-wheel-h-map`).
+    pub mouse_axis_map: MouseAxisMap,
     #[cfg(any(
         all(target_os = "windows", feature = "interception_driver"),
         target_os = "linux",
@@ -205,6 +209,7 @@ impl Default for CfgOptions {
             trans_resolution_behavior_v2: true,
             chords_v2_min_idle: 5,
             tap_hold_require_prior_idle: 0,
+            mouse_axis_map: MouseAxisMap::default(),
             #[cfg(any(
                 all(target_os = "windows", feature = "interception_driver"),
                 target_os = "linux",
@@ -951,6 +956,20 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                             }
                         }
                     }
+                    "mouse-x-map" => {
+                        cfg.mouse_axis_map.movement_x = parse_movement_source_cfg(val, label)?;
+                    }
+                    "mouse-y-map" => {
+                        cfg.mouse_axis_map.movement_y = parse_movement_source_cfg(val, label)?;
+                    }
+                    "mouse-wheel-v-map" => {
+                        cfg.mouse_axis_map.wheel_v = parse_wheel_source_cfg(val, label)?;
+                        validate_wheel_permutation(val, &cfg.mouse_axis_map)?;
+                    }
+                    "mouse-wheel-h-map" => {
+                        cfg.mouse_axis_map.wheel_h = parse_wheel_source_cfg(val, label)?;
+                        validate_wheel_permutation(val, &cfg.mouse_axis_map)?;
+                    }
                     _ => bail_expr!(key, "Unknown defcfg option {}", label),
                 };
             }
@@ -966,6 +985,41 @@ fn parse_defcfg_val_string(expr: &SExpr, _label: &str) -> Result<Option<String>>
         SExpr::Atom(v) => Ok(Some(v.t.clone())),
         _ => Ok(None),
     }
+}
+
+fn parse_movement_source_cfg(val: &SExpr, label: &str) -> Result<MovementSource> {
+    let v = sexpr_to_str_or_err(val, label)?;
+    MovementSource::parse(v).ok_or_else(|| {
+        anyhow_expr!(
+            val,
+            "{label} must be one of: {}",
+            MOVEMENT_SOURCE_VALUES.join(" | ")
+        )
+    })
+}
+
+fn parse_wheel_source_cfg(val: &SExpr, label: &str) -> Result<WheelSource> {
+    let v = sexpr_to_str_or_err(val, label)?;
+    WheelSource::parse(v).ok_or_else(|| {
+        anyhow_expr!(
+            val,
+            "{label} must be one of: {}",
+            WHEEL_SOURCE_VALUES.join(" | ")
+        )
+    })
+}
+
+/// Wheel events are modeled as single key codes, so each input wheel axis
+/// must feed exactly one output wheel axis; reject maps that would need to
+/// duplicate or drop a wheel axis.
+fn validate_wheel_permutation(val: &SExpr, cfg: &MouseAxisMap) -> Result<()> {
+    if cfg.wheel_v.axis == cfg.wheel_h.axis {
+        bail_expr!(
+            val,
+            "mouse-wheel-v-map and mouse-wheel-h-map must draw from different input wheel axes"
+        );
+    }
+    Ok(())
 }
 
 pub const FALSE_VALUES: [&str; 3] = ["no", "false", "0"];
