@@ -353,7 +353,7 @@ fn send_xbtn(flag: u32, xbtn: u16) {
     }
 }
 
-fn scroll(direction: MWheelDirection, distance: u16) {
+pub(crate) fn scroll(direction: MWheelDirection, distance: u16) {
     unsafe {
         let mut inputs: [INPUT; 1] = mem::zeroed();
         inputs[0].type_ = INPUT_MOUSE;
@@ -371,7 +371,7 @@ fn scroll(direction: MWheelDirection, distance: u16) {
     }
 }
 
-fn hscroll(direction: MWheelDirection, distance: u16) {
+pub(crate) fn hscroll(direction: MWheelDirection, distance: u16) {
     unsafe {
         let mut inputs: [INPUT; 1] = mem::zeroed();
         inputs[0].type_ = INPUT_MOUSE;
@@ -417,6 +417,56 @@ fn move_mouse_many(moves: &[CalculatedMouseMove]) {
 
 fn move_mouse_xy(x: i32, y: i32) {
     mouse_event(MOUSEEVENTF_MOVE, 0, x, y);
+}
+
+/// Inject an absolute cursor move to a pixel position on the virtual
+/// desktop. Used by the mouse axis remapping path to re-inject mapped
+/// movement: injecting the target position (rather than a relative delta)
+/// avoids applying pointer acceleration a second time to an already
+/// accelerated delta.
+pub(crate) fn move_mouse_abs_px(x: i32, y: i32) {
+    unsafe {
+        let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        // Absolute coordinates run 0..=65535 across the virtual desktop.
+        let vw = (GetSystemMetrics(SM_CXVIRTUALSCREEN) as i64).max(2) - 1;
+        let vh = (GetSystemMetrics(SM_CYVIRTUALSCREEN) as i64).max(2) - 1;
+        let nx = (((x - vx) as i64) * 65535 / vw).clamp(0, 65535) as i32;
+        let ny = (((y - vy) as i64) * 65535 / vh).clamp(0, 65535) as i32;
+        set_mouse_xy(nx, ny);
+    }
+}
+
+/// Mouse output requested by the mouse axis remapping hook path. Emitted
+/// with `SendInput` from a dedicated thread that is neither the hook thread
+/// nor the kanata processing thread: injecting from inside the low-level
+/// hook callback would re-enter the input pipeline on the thread that owns
+/// it, and injecting while holding the kanata lock risks lock cycles with
+/// the hook approval path.
+#[derive(Copy, Clone, Debug)]
+pub enum AxisInjection {
+    /// Absolute move to a virtual-desktop pixel position.
+    Move { x: i32, y: i32 },
+    /// Wheel scroll in a mapped direction.
+    Wheel {
+        direction: MWheelDirection,
+        distance: u16,
+    },
+}
+
+impl AxisInjection {
+    pub fn emit(self) {
+        match self {
+            AxisInjection::Move { x, y } => move_mouse_abs_px(x, y),
+            AxisInjection::Wheel {
+                direction,
+                distance,
+            } => match direction {
+                MWheelDirection::Up | MWheelDirection::Down => scroll(direction, distance),
+                MWheelDirection::Left | MWheelDirection::Right => hscroll(direction, distance),
+            },
+        }
+    }
 }
 
 fn set_mouse_xy(x: i32, y: i32) {

@@ -12,6 +12,18 @@ type MHookFn = dyn FnMut(MouseEventType) -> bool;
 thread_local! {
     /// Stores the hook callback for the current thread.
     static MHOOK: Cell<Option<Box<MHookFn>>> = Cell::default();
+    /// Cursor positions of the two most recent `WM_MOUSEMOVE` hook events
+    /// (most recent last), including injected ones. Injected moves skip the
+    /// hook callback but still move the cursor, so the tracking lives here
+    /// in `mhook_proc`; the axis-remapping callback uses the stored
+    /// pre-event position to compute movement deltas.
+    static MOUSE_MOVE_POSITIONS: Cell<(Option<Point>, Option<Point>)> = Cell::default();
+}
+
+/// The cursor position observed before the most recent `WM_MOUSEMOVE` hook
+/// event, or `None` until two moves have been observed on this thread.
+pub fn previous_mouse_move_point() -> Option<Point> {
+    MOUSE_MOVE_POSITIONS.with(|positions| positions.get().0)
 }
 
 /// Wrapper for the low-level keyboard hook API.
@@ -52,6 +64,18 @@ unsafe extern "system" fn mhook_proc(code: c_int, wparam: WPARAM, lparam: LPARAM
     let mouse_lparam = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
     let is_injected = mouse_lparam.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) != 0;
     log::trace!("{code} {wparam} {is_injected}");
+
+    // Track movement positions for every move event, injected included: the
+    // axis-remapping callback computes deltas against the previous position,
+    // and re-injected (or third-party injected) moves must advance the
+    // tracking too or later deltas would jump.
+    if (wparam as u32) == WM_MOUSEMOVE {
+        let point = Point::from(mouse_lparam.pt);
+        MOUSE_MOVE_POSITIONS.with(|positions| {
+            let (_, current) = positions.get();
+            positions.set((current, Some(point)));
+        });
+    }
 
     // Regarding is_injected check:
     // `SendInput()` internally calls the hook function.

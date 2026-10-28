@@ -80,8 +80,8 @@ use kanata_parser::cfg;
 use kanata_parser::cfg::list_actions::*;
 use kanata_parser::cfg::*;
 use kanata_parser::custom_action::*;
-use kanata_parser::mouse_axis::MouseAxisMap;
 pub use kanata_parser::keys::*;
+use kanata_parser::mouse_axis::MouseAxisMap;
 use kanata_tcp_protocol::ServerMessage;
 
 mod clipboard;
@@ -933,6 +933,18 @@ impl Kanata {
                 {
                     log::warn!(
                         "defcfg option mouse-x-map/mouse-y-map movement remapping will not take effect until kanata is restarted!"
+                    );
+                }
+            }
+            #[cfg(all(target_os = "windows", not(feature = "interception_driver")))]
+            {
+                if !self.mouse_axis_map.lock().maps_movement()
+                    && cfg.options.mouse_axis_map.maps_movement()
+                {
+                    log::warn!(
+                        "mouse movement axis mapping needs the mouse hook: if no mouse keys \
+                         or axis mappings were configured at startup, restart kanata to pick \
+                         the mapping up"
                     );
                 }
             }

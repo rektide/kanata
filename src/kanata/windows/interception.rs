@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use kanata_interception as ic;
+use kanata_parser::mouse_axis::{MouseAxisMap, WheelAxis};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender as Sender;
@@ -26,8 +27,13 @@ impl Kanata {
         let mouse_to_intercept_excluded_hwids: Option<Vec<[u8; HWID_ARR_SZ]>> =
             kanata.lock().intercept_mouse_hwids_exclude.clone();
         let mouse_movement_key = kanata.lock().mouse_movement_key.clone();
+        let mouse_axis_map = kanata.lock().mouse_axis_map.clone();
         if mouse_to_intercept_hwids.is_some() || mouse_to_intercept_excluded_hwids.is_some() {
-            if mouse_movement_key.lock().is_some() {
+            // Movement remapping needs MOVE strokes as well, just like
+            // mouse-movement-key.
+            let intercept_move_strokes =
+                mouse_movement_key.lock().is_some() || mouse_axis_map.lock().maps_movement();
+            if intercept_move_strokes {
                 intrcptn.set_filter(ic::is_mouse, ic::Filter::MouseFilter(ic::MouseState::all()));
             } else {
                 intrcptn.set_filter(
@@ -94,11 +100,13 @@ impl Kanata {
                                 }
                             }
 
-                            if let (true, Some(event)) =
-                                (allow_this_dev, mouse_state_to_event(state, rolling))
-                            {
+                            if let (true, Some(event)) = (
+                                allow_this_dev,
+                                mouse_state_to_event(&mouse_axis_map.lock(), state, rolling),
+                            ) {
                                 event
                             } else {
+                                map_mouse_stroke_axes(&mouse_axis_map, &mut strokes[i]);
                                 intrcptn.send(dev, &strokes[i..i + 1]);
                                 continue;
                             }
@@ -189,7 +197,11 @@ fn is_device_interceptable(
         _ => unreachable!("excluded and allowed should be mutually exclusive"),
     }
 }
-fn mouse_state_to_event(state: ic::MouseState, rolling: i16) -> Option<KeyEvent> {
+fn mouse_state_to_event(
+    mouse_axis_map: &MouseAxisMap,
+    state: ic::MouseState,
+    rolling: i16,
+) -> Option<KeyEvent> {
     if state.contains(ic::MouseState::RIGHT_BUTTON_DOWN) {
         Some(KeyEvent::new(OsCode::BTN_RIGHT, KeyValue::Press))
     } else if state.contains(ic::MouseState::RIGHT_BUTTON_UP) {
@@ -211,22 +223,24 @@ fn mouse_state_to_event(state: ic::MouseState, rolling: i16) -> Option<KeyEvent>
     } else if state.contains(ic::MouseState::BUTTON_5_UP) {
         Some(KeyEvent::new(OsCode::BTN_EXTRA, KeyValue::Release))
     } else if state.contains(ic::MouseState::WHEEL) {
-        let osc = if rolling >= 0 {
+        // Apply the configured wheel axis mapping so remapped wheels
+        // observe the mapped direction.
+        let osc = mouse_axis_map.map_wheel_code(if rolling >= 0 {
             OsCode::MouseWheelUp
         } else {
             OsCode::MouseWheelDown
-        };
+        });
         if MAPPED_KEYS.lock().contains(&osc) {
             Some(KeyEvent::new(osc, KeyValue::Tap))
         } else {
             None
         }
     } else if state.contains(ic::MouseState::HWHEEL) {
-        let osc = if rolling >= 0 {
+        let osc = mouse_axis_map.map_wheel_code(if rolling >= 0 {
             OsCode::MouseWheelRight
         } else {
             OsCode::MouseWheelLeft
-        };
+        });
         if MAPPED_KEYS.lock().contains(&osc) {
             Some(KeyEvent::new(osc, KeyValue::Tap))
         } else {
@@ -234,5 +248,53 @@ fn mouse_state_to_event(state: ic::MouseState, rolling: i16) -> Option<KeyEvent>
         }
     } else {
         None
+    }
+}
+
+/// Rewrite a passed-through mouse stroke in place according to the
+/// configured mouse axis mapping: relative movement deltas are mapped, and
+/// wheel strokes are redirected to the mapped wheel axis and direction.
+/// Absolute movement strokes are left untouched.
+fn map_mouse_stroke_axes(mouse_axis_map: &Mutex<MouseAxisMap>, stroke: &mut ic::Stroke) {
+    let map = mouse_axis_map.lock();
+    let ic::Stroke::Mouse {
+        state,
+        flags,
+        rolling,
+        x,
+        y,
+        ..
+    } = stroke
+    else {
+        return;
+    };
+    let wheel_bits = ic::MouseState::WHEEL | ic::MouseState::HWHEEL;
+    if state.contains(ic::MouseState::MOVE)
+        && !state.intersects(wheel_bits)
+        && map.maps_movement()
+        && flags.contains(ic::MouseFlags::MOVE_RELATIVE)
+    {
+        let (mapped_x, mapped_y) = map.map_movement(*x, *y);
+        *x = mapped_x;
+        *y = mapped_y;
+    } else if map.maps_wheel() && state.intersects(wheel_bits) {
+        let (input_axis, positive) = if state.contains(ic::MouseState::WHEEL) {
+            (WheelAxis::V, *rolling >= 0)
+        } else {
+            (WheelAxis::H, *rolling >= 0)
+        };
+        let (output_axis, output_positive) = map.map_wheel(input_axis, positive);
+        let magnitude = rolling.unsigned_abs();
+        *rolling = if output_positive {
+            magnitude as i16
+        } else {
+            -(magnitude as i16)
+        };
+        *state = (*state & !wheel_bits)
+            | if output_axis == WheelAxis::V {
+                ic::MouseState::WHEEL
+            } else {
+                ic::MouseState::HWHEEL
+            };
     }
 }
