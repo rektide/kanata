@@ -5138,6 +5138,86 @@ Monitoring permission in System Settings > Privacy & Security.
 )
 ----
 
+[[mouse-axis-map]]
+=== Linux or Windows only: mouse-x-map, mouse-y-map, mouse-wheel-v-map, mouse-wheel-h-map
+
+Remap physical mouse axes: swap and invert pointer movement (X/Y) and wheel
+(vertical/horizontal) axes, e.g. for a trackpad physically rotated 90 degrees
+whose axis swap should happen in software. This covers the flip/swap axis
+manipulation of Karabiner-Elements' `mouse_basic`.
+
+Each output axis draws from one input axis, optionally inverted:
+
+[cols="1,1,2"]
+|===
+|Option |Accepted values |Default
+
+|`mouse-x-map`
+|`x` \| `y` \| `-x` \| `-y`
+|`x`
+
+|`mouse-y-map`
+|`x` \| `y` \| `-x` \| `-y`
+|`y`
+
+|`mouse-wheel-v-map`
+|`v` \| `h` \| `-v` \| `-h`
+|`v`
+
+|`mouse-wheel-h-map`
+|`v` \| `h` \| `-v` \| `-h`
+|`h`
+|===
+
+Axis signs follow screen coordinates: pointer X grows rightward, pointer Y
+grows downward; the vertical wheel is positive scrolling up, the horizontal
+wheel positive scrolling right. A leading `-` inverts the axis.
+
+.Example: rotate pointer movement 90 degrees and invert vertical scrolling
+[source]
+----
+(defcfg
+  mouse-x-map  y
+  mouse-y-map  -x
+  mouse-wheel-v-map -v
+)
+----
+
+Karabiner equivalents: `flip_x` is `mouse-x-map -x`; `swap_xy` is
+`mouse-x-map y` plus `mouse-y-map x`; `flip_vertical_wheel` is
+`mouse-wheel-v-map -v`; and so on.
+
+Notes:
+
+- Wheel mappings must be permutations: `mouse-wheel-v-map` and
+  `mouse-wheel-h-map` must draw from different input wheel axes, because a
+  wheel event is a single key code and cannot feed two outputs.
+- Movement mappings may draw both outputs from the same input axis. The other
+  input axis is then discarded — the equivalent of Karabiner's `discard`.
+- Remapping applies to physical (passed-through) mouse input. Actions like
+  `movemouse-*` and `mwheel-*` that kanata generates itself are unaffected;
+  remap wheel input codes via `defsrc` (`mwu`/`mwd`/`mwl`/`mwr`) when you want
+  them to trigger kanata actions.
+
+Platform support:
+
+- Linux: movement and wheel remapping, live-reloadable.
+- Windows with the Interception driver: movement and wheel remapping.
+  Enabling movement remapping requires kanata to restart if mouse movement
+  events were not already being collected at startup.
+- Windows with the default low-level hook: wheel remapping and movement
+  remapping work, but movement remapping blocks each physical mouse move and
+  re-injects the mapped position, which adds slight movement latency.
+  Applications reading Raw Input (e.g. some games) still observe the
+  physical, unmapped events; use the Interception driver build for
+  transparent remapping.
+- macOS: not implemented yet; a non-identity mapping logs a warning and is
+  ignored.
+
+Unmapped wheel events re-emitted on Windows low-level hook are injected as
+one wheel notch per event, losing any high-resolution scroll granularity of
+the physical device.
+
 [[linux-only-linux-dev]]
 === Linux only: linux-dev
 

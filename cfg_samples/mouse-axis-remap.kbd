@@ -1,0 +1,34 @@
+#|
+Example of physical mouse axis remapping (defcfg mouse-*-map):
+software-side axis handling for a trackpad physically rotated 90 degrees.
+
+- mouse-x-map  y,  mouse-y-map -x: pointer movement is rotated 90 degrees
+- mouse-wheel-v-map -v: natural (inverted) vertical scrolling
+- mouse-wheel-h-map h: horizontal scrolling unchanged (the default)
+
+Applies to passed-through physical mouse input on Linux and Windows; see the
+mouse-x-map section of docs/config.adoc for platform details.
+|#
+
+(defcfg
+  process-unmapped-keys yes
+  mouse-x-map        y
+  mouse-y-map        -x
+  mouse-wheel-v-map  -v
+)
+
+(defsrc
+  caps
+)
+
+(deflayer default
+  @cap
+)
+
+(defalias
+  cap (tap-hold 200 200 esc (layer-toggle extra))
+)
+
+(deflayer extra
+  _
+)
