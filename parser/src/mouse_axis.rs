@@ -151,11 +151,7 @@ impl MouseAxisMap {
     pub fn map_movement(&self, dx: i32, dy: i32) -> (i32, i32) {
         let project = |src: MovementSource| {
             let v = if src.axis == MovementAxis::X { dx } else { dy };
-            if src.invert {
-                v.saturating_neg()
-            } else {
-                v
-            }
+            if src.invert { v.saturating_neg() } else { v }
         };
         (project(self.movement_x), project(self.movement_y))
     }
@@ -204,17 +200,23 @@ mod tests {
     #[test]
     fn parses_sources_with_optional_sign() {
         assert_eq!(MovementSource::parse("x"), Some(MovementSource::X));
-        assert_eq!(MovementSource::parse("-y"), Some(MovementSource {
-            axis: MovementAxis::Y,
-            invert: true
-        }));
+        assert_eq!(
+            MovementSource::parse("-y"),
+            Some(MovementSource {
+                axis: MovementAxis::Y,
+                invert: true
+            })
+        );
         assert_eq!(MovementSource::parse("+X"), Some(MovementSource::X));
         assert_eq!(MovementSource::parse("nope"), None);
         assert_eq!(WheelSource::parse("h"), Some(WheelSource::H));
-        assert_eq!(WheelSource::parse("-V"), Some(WheelSource {
-            axis: WheelAxis::V,
-            invert: true
-        }));
+        assert_eq!(
+            WheelSource::parse("-V"),
+            Some(WheelSource {
+                axis: WheelAxis::V,
+                invert: true
+            })
+        );
         assert_eq!(WheelSource::parse("x"), None);
     }
 
