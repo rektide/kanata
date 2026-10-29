@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Records per-cell and blanket requirements and reviews and connects the inheritance proposal, scope addendum and deferred animation desire
+    title: Records the evolving cell/matrix/scalar direction with both multiplication kinds and connects the layer-design corpus and deferred animation desire
   - resource: /docs/config.adoc
     title: Implemented global linear and directional axis-map configuration
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
@@ -38,6 +38,10 @@ Starting examples:
 
 ## Layer-controlled transforms — current design question
 
+- [Latest scope direction](layer-transform-ask0.gpt6a.md#cell-matrix-scalar):
+  cell, matrix and scalar operands should coexist, with coefficient-wise
+  multiplication and true matrix composition explicitly distinguished. A
+  consolidated Astra-high revision is commissioned to reconcile these freedoms.
 - [Human ask and design commission](layer-transform-ask0.gpt6a.md): precision and
   boost layers for X/Y and other channels; null inheritance; absolute, additive
   and multiplicative parameter operations; questions about gains, matrix
@@ -56,7 +60,9 @@ Starting examples:
   family-local blanket default, overridden by explicit cell operations; explicit
   null excludes a cell, while omission accepts the blanket. Every selected
   operation uses the pre-layer inherited value. This refines the first proposal's
-  omitted/null equivalence and awaits selection of that rule.
+  omitted/null equivalence. It records the preceding scope discussion; the latest
+  direction above asks for a broader interface rather than selecting this
+  blanket-only refinement as final.
 
 ## Deferred animation desire
 

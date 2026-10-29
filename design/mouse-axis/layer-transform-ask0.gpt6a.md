@@ -1,14 +1,14 @@
 ---
 type: Request
 title: Layer-controlled input transforms and deferred animation desire
-description: Human requirements and design questions for inherited null, set, add and multiply operations on motion-transform settings, with a deferred animation sketch.
+description: Human requirements for cell, matrix and scalar layer operations, sparse inheritance, distinct elementwise and true matrix multiplication, and deferred transform animation.
 resource: /design/mouse-axis/layer-transform-ask0.gpt6a.md
 status: draft
 author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human commissions per-cell and blanket layer operations and defers animation; parent records clarifications and connects the Astra-high proposal and scope refinement
+    title: Human expands the layer design to cell, matrix and scalar operands with both explicitly named multiplication kinds; parent preserves this evolution and the deferred animation ask
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -54,6 +54,9 @@ sparse scalar operations, a full active-layer resolver, and explicit report and
 fractional-state boundaries. Its worked examples answer this ask; its
 [decision section](layer-transform-design0.gpt6a.md#decisions-to-accept-before-implementation)
 identifies the choices to select before implementation.
+The [latest scope direction](#cell-matrix-scalar) below expands that proposal
+and its blanket addendum; earlier recommendations to defer true composition
+are not constraints on the revised design.
 
 ## Vocabulary and desired freedoms
 
@@ -134,6 +137,61 @@ recommends selecting one operation per cell per layer: explicit cell operation
 operation acts on the pre-layer inherited value. Under this proposed refinement,
 omission accepts a blanket while explicit null exempts the cell. This is the
 recommended answer to the questions above, pending human selection.
+
+<a id="cell-matrix-scalar"></a>
+
+## Updated scope: cell, matrix and scalar
+
+After reviewing the cell/blanket addendum, the human asked to put the operation
+on the whole matrix rather than attach an operator to each individual cell.
+When asked to distinguish coefficient-wise multiplication from true matrix
+multiplication, the human explicitly selected **both, explicitly named**, then
+expanded the desired forms again:
+
+> “maybe all three: cell, matrix, scalar”
+
+The current design commission therefore includes all three operand forms:
+
+- **Cell:** a targeted coefficient operation.
+- **Matrix:** one operation with a matrix of operand values, including sparse
+  entries where mathematically meaningful. It must be possible to request a
+  matrix-level replacement or addition directly.
+- **Scalar:** one numeric operand applied over a clearly selected scope,
+  providing the blanket case without repeating a value in every cell.
+
+Keep operation and operand form separate. Replacement/set, addition and
+coefficient-wise multiplication are distinct from genuine transform composition
+by matrix product. Explicit names must make the two multiplication meanings
+unambiguous. The desired forms coexist; the latest direction is not a request
+to remove cell-level control.
+
+Request a consolidated Astra-high revision rather than treating the earlier
+blanket-as-default syntax as the final interface. Define how operations at these
+scopes interact within a layer and across inherited layers. The earlier
+one-operation-per-cell rule was a recommendation for that smaller interface,
+not a human restriction that should silently prevent the new matrix operations.
+
+Important questions for the revision:
+
+- Whether cell/matrix/scalar operations use a sequential program, scoped
+  overrides, or a small explicit combination; define inherited operands and
+  avoid accidental double application.
+- Scalar broadcasting versus diagonal/identity-scaled matrices, especially for
+  addition and replacement. State the coefficient domain affected by a scalar.
+- Sparse/null semantics for coefficient edits versus a matrix used as a
+  composition factor. A neutral entry in a factor does not guarantee that the
+  corresponding final inherited coefficient stays unchanged; preserve the
+  user's sparse no-change intent without making that false promise.
+- True composition order (left/post versus right/pre), named input/output
+  dimensions, and the current rectangular directional coefficient domain.
+  Distinguish products that can be represented by existing coefficients from
+  directional stage compositions requiring a richer runtime representation.
+- Precision/scaling conveniences that preserve existing routing and rotation,
+  without conflating output gains with coefficient-wise edits.
+
+The animation opportunity remains deferred. This is still a design-first
+commission; the revision should recommend a coherent contract and identify the
+remaining semantic decisions rather than publish new runtime syntax as existing.
 
 ## Questions for the layer proposal
 
