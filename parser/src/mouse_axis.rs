@@ -1,129 +1,65 @@
-//! Physical mouse axis mapping: pointer movement (X/Y) and wheel
-//! (vertical/horizontal) axes can each be swapped and inverted.
+//! Linear mapping of relative pointer and wheel deltas.
 //!
-//! Each output axis draws from one input axis with an optional sign flip — a
-//! signed permutation of the axis pair. This covers the flip/swap operations
-//! requested in <https://github.com/jtroo/kanata/issues/2192> and is
-//! deliberately shaped like a 2×2 linear transform so more general
-//! projections (arbitrary-angle rotation, scaling) can later extend
-//! [`MouseAxisMap::map_movement`] without changing the configuration surface.
-//!
-//! Sign conventions, shared by every platform backend:
-//! - pointer X grows rightward, pointer Y grows downward;
-//! - wheel V is positive scrolling up, wheel H is positive scrolling right.
+//! Rows name outputs, columns name inputs. The supported OS channels currently
+//! form a four-dimensional space, but a mapping can use any subset on either
+//! side: it need not be a permutation or have equal input/output counts.
+//! Pointer units are native relative counts; wheel units are 1/120 of a notch.
 
 use crate::keys::OsCode;
 
-/// Pointer movement axis in screen coordinates.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
-pub enum MovementAxis {
-    #[default]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum MouseAxis {
     X,
     Y,
-}
-
-/// Wheel axis: the vertical wheel (V) or the horizontal wheel (H).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
-pub enum WheelAxis {
-    #[default]
     V,
     H,
 }
 
-/// One input axis feeding an output pointer axis, optionally inverted
-/// (e.g. `-y`).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct MovementSource {
-    pub axis: MovementAxis,
-    pub invert: bool,
-}
+pub const AXIS_COUNT: usize = 4;
+pub type AxisValues = [i32; AXIS_COUNT];
+pub type AxisRow = [f64; AXIS_COUNT];
 
-impl MovementSource {
-    pub const X: Self = Self {
-        axis: MovementAxis::X,
-        invert: false,
-    };
-    pub const Y: Self = Self {
-        axis: MovementAxis::Y,
-        invert: false,
-    };
+impl MouseAxis {
+    pub const ALL: [Self; AXIS_COUNT] = [Self::X, Self::Y, Self::V, Self::H];
+    pub const WHEELS: [Self; 2] = [Self::V, Self::H];
 
-    pub fn parse(s: &str) -> Option<Self> {
-        let (invert, axis) = split_sign(s)?;
-        let axis = match axis.to_ascii_lowercase().as_str() {
-            "x" => MovementAxis::X,
-            "y" => MovementAxis::Y,
-            _ => return None,
-        };
-        Some(Self { axis, invert })
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "x" => Some(Self::X),
+            "y" => Some(Self::Y),
+            "v" => Some(Self::V),
+            "h" => Some(Self::H),
+            _ => None,
+        }
+    }
+
+    pub fn wheel_code(self, positive: bool) -> Option<OsCode> {
+        use OsCode::*;
+        match (self, positive) {
+            (Self::V, true) => Some(MouseWheelUp),
+            (Self::V, false) => Some(MouseWheelDown),
+            (Self::H, true) => Some(MouseWheelRight),
+            (Self::H, false) => Some(MouseWheelLeft),
+            _ => None,
+        }
     }
 }
 
-/// One input wheel axis feeding an output wheel axis, optionally inverted
-/// (e.g. `-h`).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct WheelSource {
-    pub axis: WheelAxis,
-    pub invert: bool,
-}
-
-impl WheelSource {
-    pub const V: Self = Self {
-        axis: WheelAxis::V,
-        invert: false,
-    };
-    pub const H: Self = Self {
-        axis: WheelAxis::H,
-        invert: false,
-    };
-
-    pub fn parse(s: &str) -> Option<Self> {
-        let (invert, axis) = split_sign(s)?;
-        let axis = match axis.to_ascii_lowercase().as_str() {
-            "v" => WheelAxis::V,
-            "h" => WheelAxis::H,
-            _ => return None,
-        };
-        Some(Self { axis, invert })
-    }
-}
-
-/// Accepted values for `mouse-x-map` / `mouse-y-map`.
-pub const MOVEMENT_SOURCE_VALUES: [&str; 4] = ["x", "y", "-x", "-y"];
-/// Accepted values for `mouse-wheel-v-map` / `mouse-wheel-h-map`.
-pub const WHEEL_SOURCE_VALUES: [&str; 4] = ["v", "h", "-v", "-h"];
-
-fn split_sign(s: &str) -> Option<(bool, &str)> {
-    if let Some(rest) = s.trim().strip_prefix('-') {
-        Some((true, rest))
-    } else if let Some(rest) = s.trim().strip_prefix('+') {
-        Some((false, rest))
-    } else {
-        Some((false, s.trim()))
-    }
-}
-
-/// Physical mouse axis mapping: the input source of each output pointer and
-/// wheel axis. Defaults to the identity mapping.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// Identity by default. An explicitly configured row replaces that output's
+/// identity row; an empty row discards that output. Sources are always physical
+/// input channels, so rows are simultaneous, never recursively composed.
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct MouseAxisMap {
-    /// Input axis feeding output pointer X movement.
-    pub movement_x: MovementSource,
-    /// Input axis feeding output pointer Y movement.
-    pub movement_y: MovementSource,
-    /// Input wheel axis feeding the output vertical wheel.
-    pub wheel_v: WheelSource,
-    /// Input wheel axis feeding the output horizontal wheel.
-    pub wheel_h: WheelSource,
+    pub rows: [AxisRow; AXIS_COUNT],
 }
 
 impl Default for MouseAxisMap {
     fn default() -> Self {
         Self {
-            movement_x: MovementSource::X,
-            movement_y: MovementSource::Y,
-            wheel_v: WheelSource::V,
-            wheel_h: WheelSource::H,
+            rows: std::array::from_fn(|output| {
+                std::array::from_fn(|input| if input == output { 1.0 } else { 0.0 })
+            }),
         }
     }
 }
@@ -133,176 +69,141 @@ impl MouseAxisMap {
         *self == Self::default()
     }
 
-    /// Whether pointer movement axes are remapped away from the identity.
+    /// Whether this physical input needs interception (including fan-out into
+    /// another output), rather than native passthrough.
+    pub fn maps_input(&self, input: MouseAxis) -> bool {
+        let identity = Self::default();
+        (0..AXIS_COUNT).any(|output| {
+            self.rows[output][input as usize] != identity.rows[output][input as usize]
+        })
+    }
+
     pub fn maps_movement(&self) -> bool {
-        self.movement_x != MovementSource::X || self.movement_y != MovementSource::Y
+        self.maps_input(MouseAxis::X) || self.maps_input(MouseAxis::Y)
     }
 
-    /// Whether wheel axes are remapped away from the identity.
     pub fn maps_wheel(&self) -> bool {
-        self.wheel_v != WheelSource::V || self.wheel_h != WheelSource::H
+        self.maps_input(MouseAxis::V) || self.maps_input(MouseAxis::H)
     }
+}
 
-    /// Apply the movement mapping to a pointer delta.
-    ///
-    /// When both output axes draw from the same input axis, that input feeds
-    /// both outputs (moving diagonally) and the other input axis is
-    /// discarded — the equivalent of Karabiner's axis `discard`.
-    pub fn map_movement(&self, dx: i32, dy: i32) -> (i32, i32) {
-        let project = |src: MovementSource| {
-            let v = if src.axis == MovementAxis::X { dx } else { dy };
-            if src.invert { v.saturating_neg() } else { v }
-        };
-        (project(self.movement_x), project(self.movement_y))
-    }
+/// Stateful quantization, independent of the OS adapter. Fractions are retained
+/// per output and reset when the mapping changes. Sum a report's contributions
+/// before quantizing, so opposite contributions can cancel without emitting a
+/// spurious movement or scroll in either direction.
+#[derive(Default)]
+pub struct MouseAxisTransform {
+    pub map: MouseAxisMap,
+    pub remainder: AxisRow,
+}
 
-    /// Map one wheel event, described by its input axis and direction, to
-    /// the output wheel axis and direction.
-    ///
-    /// Wheel mappings must be permutations (one input axis feeds each output
-    /// wheel; enforced during parsing), so every wheel event maps to exactly
-    /// one output wheel event: the output whose source draws from the input
-    /// axis consumes the event.
-    pub fn map_wheel(&self, axis: WheelAxis, positive: bool) -> (WheelAxis, bool) {
-        if self.wheel_v.axis == axis {
-            (WheelAxis::V, positive ^ self.wheel_v.invert)
-        } else {
-            (WheelAxis::H, positive ^ self.wheel_h.invert)
+impl MouseAxisTransform {
+    pub fn reconfigure(&mut self, map: MouseAxisMap) -> bool {
+        if self.map == map {
+            return false;
         }
+        self.map = map;
+        self.remainder = [0.0; AXIS_COUNT];
+        true
     }
 
-    /// Map a wheel key code (`mwu`/`mwd`/`mwl`/`mwr`) through the wheel
-    /// mapping. Non-wheel codes pass through unchanged.
-    pub fn map_wheel_code(&self, code: OsCode) -> OsCode {
-        use OsCode::*;
-        let (axis, positive) = match code {
-            MouseWheelUp => (WheelAxis::V, true),
-            MouseWheelDown => (WheelAxis::V, false),
-            MouseWheelRight => (WheelAxis::H, true),
-            MouseWheelLeft => (WheelAxis::H, false),
-            _ => return code,
-        };
-        let (axis, positive) = self.map_wheel(axis, positive);
-        match (axis, positive) {
-            (WheelAxis::V, true) => MouseWheelUp,
-            (WheelAxis::V, false) => MouseWheelDown,
-            (WheelAxis::H, true) => MouseWheelRight,
-            (WheelAxis::H, false) => MouseWheelLeft,
-        }
+    pub fn apply(&mut self, input: AxisValues) -> AxisValues {
+        std::array::from_fn(|output| {
+            let total = self.map.rows[output]
+                .iter()
+                .zip(input)
+                .fold(self.remainder[output], |sum, (gain, value)| {
+                    sum + gain * f64::from(value)
+                });
+            // Saturate rather than wrap; don't retain an unrepresentable
+            // backlog. NaN is only possible from extreme finite coefficients
+            // whose overflowing products have opposite signs.
+            if !total.is_finite() || total < i32::MIN as f64 || total > i32::MAX as f64 {
+                self.remainder[output] = 0.0;
+                return total as i32;
+            }
+            // Avoid losing a unit to rounding error, e.g. ten 0.1 steps.
+            let nearest = total.round();
+            let total = if (total - nearest).abs() <= 8.0 * f64::EPSILON * total.abs().max(1.0) {
+                nearest
+            } else {
+                total
+            };
+            let whole = total.trunc();
+            self.remainder[output] = total - whole;
+            whole as i32
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use OsCode::*;
 
     #[test]
-    fn parses_sources_with_optional_sign() {
-        assert_eq!(MovementSource::parse("x"), Some(MovementSource::X));
-        assert_eq!(
-            MovementSource::parse("-y"),
-            Some(MovementSource {
-                axis: MovementAxis::Y,
-                invert: true
-            })
-        );
-        assert_eq!(MovementSource::parse("+X"), Some(MovementSource::X));
-        assert_eq!(MovementSource::parse("nope"), None);
-        assert_eq!(WheelSource::parse("h"), Some(WheelSource::H));
-        assert_eq!(
-            WheelSource::parse("-V"),
-            Some(WheelSource {
-                axis: WheelAxis::V,
-                invert: true
-            })
-        );
-        assert_eq!(WheelSource::parse("x"), None);
+    fn full_matrix_mixes_axes_and_cancels_before_quantization() {
+        let mut transform = MouseAxisTransform::default();
+        transform.map.rows[0] = [0.5, -0.5, 0.0, 0.0];
+        transform.map.rows[1] = [0.5, 0.5, 0.0, 0.0];
+        assert_eq!(transform.apply([3, 3, 0, 0]), [0, 3, 0, 0]);
+        assert_eq!(transform.apply([4, -2, 0, 0]), [3, 1, 0, 0]);
     }
 
     #[test]
-    fn default_is_identity() {
-        let m = MouseAxisMap::default();
-        assert!(m.is_identity());
-        assert!(!m.maps_movement());
-        assert!(!m.maps_wheel());
-        assert_eq!(m.map_movement(3, -5), (3, -5));
-        assert_eq!(m.map_wheel_code(MouseWheelUp), MouseWheelUp);
+    fn wheels_can_drive_pointer_and_fan_out() {
+        let mut transform = MouseAxisTransform::default();
+        transform.map.rows = [
+            [0.0, 0.0, 0.0, 0.25],
+            [0.0, 0.0, -0.25, 0.0],
+            [0.0; AXIS_COUNT],
+            [0.0; AXIS_COUNT],
+        ];
+        assert_eq!(transform.apply([0, 0, 120, 240]), [60, -30, 0, 0]);
+        transform.map.rows[2] = [0.0, 0.0, 1.0, 1.0];
+        assert_eq!(transform.apply([0, 0, 120, -120]), [-30, -30, 0, 0]);
+        assert!(transform.map.maps_wheel());
     }
 
     #[test]
-    fn movement_swap_and_invert() {
-        let m = MouseAxisMap {
-            movement_x: MovementSource {
-                axis: MovementAxis::Y,
-                invert: false,
-            },
-            movement_y: MovementSource {
-                axis: MovementAxis::X,
-                invert: true,
-            },
-            ..Default::default()
-        };
-        assert!(m.maps_movement());
-        // x ← y, y ← -x: a 90° pointer rotation.
-        assert_eq!(m.map_movement(3, 7), (7, -3));
-        assert_eq!(m.map_movement(-2, 1), (1, 2));
+    fn fractional_steps_accumulate_and_reverse_without_bias() {
+        let mut transform = MouseAxisTransform::default();
+        transform.map.rows[0][0] = 0.1;
+        for _ in 0..9 {
+            assert_eq!(transform.apply([1, 0, 0, 0])[0], 0);
+        }
+        assert_eq!(transform.apply([1, 0, 0, 0])[0], 1);
+        for _ in 0..9 {
+            assert_eq!(transform.apply([-1, 0, 0, 0])[0], 0);
+        }
+        assert_eq!(transform.apply([-1, 0, 0, 0])[0], -1);
+        assert_eq!(transform.remainder, [0.0; AXIS_COUNT]);
     }
 
     #[test]
-    fn movement_same_axis_source_discards_the_other() {
-        let m = MouseAxisMap {
-            movement_x: MovementSource::X,
-            movement_y: MovementSource {
-                axis: MovementAxis::X,
-                invert: true,
-            },
-            ..Default::default()
-        };
-        // y ← -x: vertical input is discarded, horizontal input mirrors.
-        assert_eq!(m.map_movement(4, 9), (4, -4));
-        assert_eq!(m.map_movement(0, 9), (0, 0));
+    fn input_detection_includes_cross_channel_fanout() {
+        let mut map = MouseAxisMap::default();
+        map.rows[MouseAxis::V as usize][MouseAxis::X as usize] = 2.0;
+        assert!(map.maps_movement());
+        assert!(!map.maps_wheel());
+        assert!(map.maps_input(MouseAxis::X));
+        assert!(!map.maps_input(MouseAxis::Y));
     }
 
     #[test]
-    fn wheel_flip_and_swap() {
-        let flip_v = MouseAxisMap {
-            wheel_v: WheelSource {
-                axis: WheelAxis::V,
-                invert: true,
-            },
-            ..Default::default()
-        };
-        assert!(flip_v.maps_wheel());
-        assert_eq!(flip_v.map_wheel_code(MouseWheelUp), MouseWheelDown);
-        assert_eq!(flip_v.map_wheel_code(MouseWheelDown), MouseWheelUp);
-        // H untouched.
-        assert_eq!(flip_v.map_wheel_code(MouseWheelRight), MouseWheelRight);
-
-        let swap = MouseAxisMap {
-            wheel_v: WheelSource::H,
-            wheel_h: WheelSource {
-                axis: WheelAxis::V,
-                invert: true,
-            },
-            ..Default::default()
-        };
-        assert_eq!(swap.map_wheel_code(MouseWheelUp), MouseWheelLeft);
-        assert_eq!(swap.map_wheel_code(MouseWheelDown), MouseWheelRight);
-        assert_eq!(swap.map_wheel_code(MouseWheelRight), MouseWheelUp);
-        assert_eq!(swap.map_wheel_code(MouseWheelLeft), MouseWheelDown);
+    fn map_change_resets_fractional_state() {
+        let mut transform = MouseAxisTransform::default();
+        transform.map.rows[0][0] = 0.5;
+        assert_eq!(transform.apply([1, 0, 0, 0])[0], 0);
+        assert!(transform.reconfigure(MouseAxisMap::default()));
+        assert_eq!(transform.remainder, [0.0; AXIS_COUNT]);
+        assert_eq!(transform.apply([1, 0, 0, 0])[0], 1);
     }
 
     #[test]
-    fn non_wheel_codes_pass_through() {
-        let m = MouseAxisMap {
-            wheel_v: WheelSource {
-                axis: WheelAxis::H,
-                invert: true,
-            },
-            wheel_h: WheelSource::V,
-            ..Default::default()
-        };
-        assert_eq!(m.map_wheel_code(OsCode::KEY_A), OsCode::KEY_A);
+    fn inversion_saturates_minimum_and_recovers() {
+        let mut transform = MouseAxisTransform::default();
+        transform.map.rows[0][0] = -1.0;
+        assert_eq!(transform.apply([i32::MIN, 0, 0, 0])[0], i32::MAX);
+        assert_eq!(transform.apply([1, 0, 0, 0])[0], -1);
     }
 }
