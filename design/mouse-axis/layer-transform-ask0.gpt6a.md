@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human commissions Sol xhigh after Astra notes; parent reviews delivered interfaces and runtime, approves reload policy and commissions a targeted wheel-continuity correction
+    title: Human commissions Sol xhigh after Astra notes; parent reviews the implementation and wheel-continuity correction and records completion with hardware verification limits
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -33,6 +33,8 @@ sources:
     title: Completed and verified first Sol implementation checkpoint
   - resource: /design/mouse-axis/layer-transform-implementation1.gpt61s.md
     title: Delivered runtime integration and verification receipt
+  - resource: /design/mouse-axis/layer-transform-review0.gpt61s.md
+    title: Completed identity-path wheel-continuity regression and correction
 ---
 
 # Layer-controlled input transforms and deferred animation desire
@@ -254,10 +256,14 @@ blocker was found. Public layer syntax was deliberately gated at that checkpoint
 
 The subsequent [runtime integration](layer-transform-implementation1.gpt61s.md)
 now connects public layer programs through publication, capture and state
-behavior, with checked examples. Parent review is completing an additional
-adapter-level check: switching between identity and pointer-only precision must
-preserve partial wheel accounting. A focused Sol-xhigh correction is commissioned
-for that boundary; the receipt's physical-device verification limits remain.
+behavior, with checked examples. Parent review identified an additional
+adapter-level gap: switching between identity and pointer-only precision could
+lose partial wheel accounting. The [focused correction](layer-transform-review0.gpt61s.md)
+confirmed that failure and now retains one analog path for axis-enabled
+configurations across layer changes. Parent reviewed the corrected publication
+policy and native routing boundaries; no implementation blocker remains from
+this review. The receipts' physical-device verification limits remain, and the
+animation opportunity is still deferred.
 
 ## Questions for the layer proposal
 

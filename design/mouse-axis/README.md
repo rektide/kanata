@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Reviews the delivered runtime and commissions an identity-path wheel-continuity regression, while adding a minimal physical pointer speed example
+    title: Reviews the delivered runtime and corrected identity-path wheel continuity, connects final receipts and provides a minimal physical pointer speed example
   - resource: /docs/config.adoc
     title: Implemented global linear and directional axis-map configuration
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
@@ -27,6 +27,8 @@ sources:
     title: Sol xhigh stage-one implementation receipt and verified parser/algebra contracts
   - resource: /design/mouse-axis/layer-transform-implementation1.gpt61s.md
     title: Delivered native/runtime integration, examples, verification results and hardware limits
+  - resource: /design/mouse-axis/layer-transform-review0.gpt61s.md
+    title: Confirmed production-boundary regression and correction retaining wheel accounting across identity and precision layers
 ---
 
 # Mouse and relative-input transform design
@@ -51,17 +53,21 @@ Starting examples:
   [true products](/cfg_samples/mouse-axis-layer-products.kbd), and
   [directional layer products](/cfg_samples/mouse-axis-layer-directional.kbd).
 
-## Layer-controlled transforms — delivered, final adapter review underway
+## Layer-controlled transforms — implemented and reviewed
 
 - [Runtime integration receipt](layer-transform-implementation1.gpt61s.md):
   typed public headers, full-stack resolution, immutable snapshots and selective
   epochs, frozen capture plans, preflighted reloads, checked examples and native
   adapter integration. It records executed tests versus cross-compilation and
   the remaining physical-device verification limits.
-- Parent review identified an identity/transformed wheel-accounting boundary:
-  pointer-only layer changes should preserve partial wheel credit even when the
-  effective map becomes identity. A fresh Sol-xhigh session is verifying and
-  correcting that boundary with native-adapter regressions before final delivery.
+- [Final wheel-continuity correction](layer-transform-review0.gpt61s.md): parent
+  review identified separate identity/transformed accounting paths. Sol confirmed
+  the lost half-notch with a failing production-boundary regression and corrected
+  all three native adapters. Axis-enabled configurations now retain the analog
+  path across identity/precision transitions, preserving selective wheel credit.
+  Parent reviewed the policy and routing changes; targeted Linux/shared checks
+  passed and Windows fixtures compiled. Physical-device behavior remains a
+  separate validation step, as documented in both receipts.
 
 - [Implementation commission](layer-transform-ask0.gpt6a.md#implementation-commission):
   the human requests Astra-high readiness and implementation notes, followed by
