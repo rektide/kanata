@@ -70,6 +70,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time;
 
+use self::mouse_axis::{MotionSnapshot, WheelMask};
 #[cfg(feature = "tcp_server")]
 use crate::SocketAddrWrapper;
 use crate::ValidatedArgs;
@@ -359,7 +360,7 @@ pub struct Kanata {
     /// Physical mouse axis mapping (defcfg `mouse-axis-map` or shorthand). Shared with the OS input
     /// loops so live reload updates the transform they apply to passed-
     /// through mouse movement and wheel events.
-    pub(crate) mouse_axis_map: Arc<Mutex<MouseAxisMap>>,
+    pub(crate) motion_snapshot: Arc<Mutex<Arc<MotionSnapshot>>>,
     /// Whether the loaded config outputs mouse buttons. Gates installing the
     /// macOS mouse event tap (for drag-assist) so configs that never emit mouse
     /// buttons do not request the extra Accessibility / Input Monitoring
@@ -452,6 +453,10 @@ impl Kanata {
             }
         };
         warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
+        let motion_snapshot = Arc::new(Mutex::new(Arc::new(MotionSnapshot::initial(
+            cfg.options.mouse_axis_map,
+            WheelMask::new(|code| cfg.mapped_keys.contains(&code)),
+        ))));
 
         let kbd_out = match KbdOut::new(
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -614,7 +619,7 @@ impl Kanata {
                 target_os = "unknown"
             ))]
             mouse_movement_key: Arc::new(Mutex::new(cfg.options.mouse_movement_key)),
-            mouse_axis_map: Arc::new(Mutex::new(cfg.options.mouse_axis_map)),
+            motion_snapshot,
             #[cfg(target_os = "macos")]
             emits_mouse_buttons: Arc::new(Mutex::new(cfg.emits_mouse_buttons)),
             #[cfg(feature = "tcp_server")]
@@ -637,6 +642,10 @@ impl Kanata {
             }
         };
         warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
+        let motion_snapshot = Arc::new(Mutex::new(Arc::new(MotionSnapshot::initial(
+            cfg.options.mouse_axis_map,
+            WheelMask::new(|code| cfg.mapped_keys.contains(&code)),
+        ))));
 
         let kbd_out = match KbdOut::new(
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -778,7 +787,7 @@ impl Kanata {
                 target_os = "unknown"
             ))]
             mouse_movement_key: Arc::new(Mutex::new(cfg.options.mouse_movement_key)),
-            mouse_axis_map: Arc::new(Mutex::new(cfg.options.mouse_axis_map)),
+            motion_snapshot,
             #[cfg(target_os = "macos")]
             emits_mouse_buttons: Arc::new(Mutex::new(cfg.emits_mouse_buttons)),
             #[cfg(feature = "tcp_server")]
@@ -919,13 +928,15 @@ impl Kanata {
         self.macro_on_press_cancel_duration = 0;
 
         #[cfg(target_os = "windows")]
-        if self.mouse_axis_map.lock().is_identity() && !cfg.options.mouse_axis_map.is_identity() {
+        if self.motion_snapshot.lock().map.is_identity()
+            && !cfg.options.mouse_axis_map.is_identity()
+        {
             log::warn!(
                 "If mouse input was not enabled at startup, restart Kanata to enable axis mapping."
             );
         }
         #[cfg(all(target_os = "windows", feature = "interception_driver"))]
-        if !self.mouse_axis_map.lock().maps_movement()
+        if !self.motion_snapshot.lock().map.maps_movement()
             && cfg.options.mouse_axis_map.maps_movement()
             && self.mouse_movement_key.lock().is_none()
         {
@@ -934,7 +945,12 @@ impl Kanata {
             );
         }
         // This update also belongs to LLHOOK, which has no mouse_movement_key.
-        *self.mouse_axis_map.lock() = cfg.options.mouse_axis_map;
+        let wheels = WheelMask::new(|code| MAPPED_KEYS.lock().contains(&code));
+        let snapshot = self
+            .motion_snapshot
+            .lock()
+            .next(cfg.options.mouse_axis_map, wheels, true);
+        *self.motion_snapshot.lock() = snapshot;
         warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
 
         #[cfg(any(

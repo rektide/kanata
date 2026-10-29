@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::mpsc::SyncSender as Sender;
 
 use super::PRESSED_KEYS;
-use crate::kanata::mouse_axis::{AXIS_COUNT, AxisState, MouseAxis, MouseAxisMap};
+use crate::kanata::mouse_axis::{AXIS_COUNT, AxisState, MotionSnapshot, MouseAxis, WheelMask};
 use crate::kanata::*;
 use crate::oskbd::KeyValue;
 use kanata_parser::keys::OsCode;
@@ -27,15 +27,15 @@ impl Kanata {
         let mouse_to_intercept_excluded_hwids: Option<Vec<[u8; HWID_ARR_SZ]>> =
             kanata.lock().intercept_mouse_hwids_exclude.clone();
         let mouse_movement_key = kanata.lock().mouse_movement_key.clone();
-        let mouse_axis_map = kanata.lock().mouse_axis_map.clone();
+        let motion_snapshot = kanata.lock().motion_snapshot.clone();
         if mouse_to_intercept_hwids.is_some()
             || mouse_to_intercept_excluded_hwids.is_some()
-            || !mouse_axis_map.lock().is_identity()
+            || !motion_snapshot.lock().map.is_identity()
         {
             // Movement remapping needs MOVE strokes as well, just like
             // mouse-movement-key.
             let intercept_move_strokes =
-                mouse_movement_key.lock().is_some() || mouse_axis_map.lock().maps_movement();
+                mouse_movement_key.lock().is_some() || motion_snapshot.lock().map.maps_movement();
             if intercept_move_strokes {
                 intrcptn.set_filter(ic::is_mouse, ic::Filter::MouseFilter(ic::MouseState::all()));
             } else {
@@ -106,12 +106,13 @@ impl Kanata {
                             {
                                 tx.try_send(KeyEvent::new(ms_mvmt_key, KeyValue::Tap))?;
                             }
-                            let map = *mouse_axis_map.lock();
+                            let snapshot = motion_snapshot.lock().clone();
                             let axis_state = axis_states.entry(dev).or_default();
-                            if !map.is_identity() {
+                            axis_state.observe_snapshot(&snapshot);
+                            if !snapshot.map.is_identity() {
                                 let output = map_mouse_stroke_axes(
                                     axis_state,
-                                    map,
+                                    &snapshot,
                                     strokes[i],
                                     |code| MAPPED_KEYS.lock().contains(&code),
                                     |event| send_key_event(&tx, event),
@@ -119,8 +120,9 @@ impl Kanata {
                                 intrcptn.send(dev, &output);
                                 continue;
                             }
-                            axis_state.apply(map, [0; AXIS_COUNT]);
-                            if let Some(event) = mouse_state_to_event(state, rolling) {
+                            if let Some(event) =
+                                mouse_state_to_event(state, rolling, snapshot.wheels)
+                            {
                                 event
                             } else {
                                 intrcptn.send(dev, &strokes[i..i + 1]);
@@ -129,7 +131,9 @@ impl Kanata {
                         }
                     };
                     check_for_exit(&key_event);
-                    if !MAPPED_KEYS.lock().contains(&key_event.code) {
+                    if !WheelMask::is_wheel(key_event.code)
+                        && !MAPPED_KEYS.lock().contains(&key_event.code)
+                    {
                         log::debug!("{key_event:?} is not mapped");
                         intrcptn.send(dev, &strokes[i..i + 1]);
                         continue;
@@ -217,7 +221,11 @@ fn is_device_interceptable(
         _ => unreachable!("excluded and allowed should be mutually exclusive"),
     }
 }
-fn mouse_state_to_event(state: ic::MouseState, rolling: i16) -> Option<KeyEvent> {
+fn mouse_state_to_event(
+    state: ic::MouseState,
+    rolling: i16,
+    wheels: WheelMask,
+) -> Option<KeyEvent> {
     if state.contains(ic::MouseState::RIGHT_BUTTON_DOWN) {
         Some(KeyEvent::new(OsCode::BTN_RIGHT, KeyValue::Press))
     } else if state.contains(ic::MouseState::RIGHT_BUTTON_UP) {
@@ -244,7 +252,7 @@ fn mouse_state_to_event(state: ic::MouseState, rolling: i16) -> Option<KeyEvent>
         } else {
             OsCode::MouseWheelDown
         };
-        if MAPPED_KEYS.lock().contains(&osc) {
+        if wheels.contains(osc) {
             Some(KeyEvent::new(osc, KeyValue::Tap))
         } else {
             None
@@ -255,7 +263,7 @@ fn mouse_state_to_event(state: ic::MouseState, rolling: i16) -> Option<KeyEvent>
         } else {
             OsCode::MouseWheelLeft
         };
-        if MAPPED_KEYS.lock().contains(&osc) {
+        if wheels.contains(osc) {
             Some(KeyEvent::new(osc, KeyValue::Tap))
         } else {
             None
@@ -269,11 +277,12 @@ fn mouse_state_to_event(state: ic::MouseState, rolling: i16) -> Option<KeyEvent>
 /// mapped components without dropping the other parts of the original stroke.
 fn map_mouse_stroke_axes(
     axis_state: &mut AxisState,
-    map: MouseAxisMap,
+    snapshot: &MotionSnapshot,
     stroke: ic::Stroke,
     is_mapped: impl Fn(OsCode) -> bool,
     mut send_key: impl FnMut(KeyEvent) -> Result<()>,
 ) -> Result<Vec<ic::Stroke>> {
+    axis_state.observe_snapshot(snapshot);
     let ic::Stroke::Mouse {
         mut state,
         flags,
@@ -298,8 +307,8 @@ fn map_mouse_stroke_axes(
     if state.contains(ic::MouseState::HWHEEL) {
         input[MouseAxis::H as usize] = rolling.into();
     }
-    let mut output = axis_state.apply(map, input);
-    axis_state.route_wheels(&mut output, &is_mapped, |code| {
+    let mut output = axis_state.apply(input);
+    axis_state.route_wheels(&mut output, snapshot.wheels, |code| {
         send_key(KeyEvent::new(code, KeyValue::Tap))
     })?;
     state.remove(wheel_bits);
@@ -365,6 +374,7 @@ fn map_mouse_stroke_axes(
 #[cfg(test)]
 mod axis_tests {
     use super::*;
+    use crate::kanata::mouse_axis::MouseAxisMap;
 
     #[test]
     fn relative_zero_flag_and_combined_buttons_do_not_hide_motion() {
@@ -382,7 +392,7 @@ mod axis_tests {
         let mut keys = vec![];
         let output = map_mouse_stroke_axes(
             &mut AxisState::default(),
-            map,
+            &MotionSnapshot::initial(map, WheelMask::default()),
             input,
             |code| code == OsCode::BTN_LEFT,
             |key| {
@@ -417,7 +427,7 @@ mod axis_tests {
         map.rows[MouseAxis::V as usize][MouseAxis::V as usize] = -1.0;
         let output = map_mouse_stroke_axes(
             &mut AxisState::default(),
-            map,
+            &MotionSnapshot::initial(map, WheelMask::default()),
             ic::Stroke::Mouse {
                 state: ic::MouseState::WHEEL,
                 flags: ic::MouseFlags::MOVE_ABSOLUTE,

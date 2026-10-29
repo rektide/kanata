@@ -93,12 +93,12 @@ impl Kanata {
             MouseWheelLeft,
             MouseWheelRight,
         ];
-        let mouse_axis_map = _cfg.lock().mouse_axis_map.clone();
-        let maps_movement_at_startup = mouse_axis_map.lock().maps_movement();
+        let motion_snapshot = _cfg.lock().motion_snapshot.clone();
+        let maps_movement_at_startup = motion_snapshot.lock().map.maps_movement();
         let _handle = if oscodes_for_mhook_active
             .iter()
             .any(|osc| MAPPED_KEYS.lock().contains(osc))
-            || mouse_axis_map.lock().maps_wheel()
+            || motion_snapshot.lock().map.maps_wheel()
             || maps_movement_at_startup
         {
             log::info!("Installing mouse hook callback.");
@@ -125,7 +125,9 @@ impl Kanata {
             let mut axis_state = AxisState::default();
             let mousehook = MouseHook::set_input_cb(move |mouse_event| {
                 log::debug!("llhook mouse event: {mouse_event:?}");
-                let map = *mouse_axis_map.lock();
+                let snapshot = motion_snapshot.lock().clone();
+                axis_state.observe_snapshot(&snapshot);
+                let map = snapshot.map;
                 let mut input = [0; AXIS_COUNT];
                 let is_axis_event = match mouse_event {
                     MouseEventType::Move(MouseMoveEvent { point: Some(point) })
@@ -149,19 +151,13 @@ impl Kanata {
                     }
                     _ => false,
                 };
-                // Also reconfigure on identity so re-enabling a transform
-                // cannot revive fractions left over from the old mapping.
-                let mut output = axis_state.apply(map, input);
+                let mut output = axis_state.apply(input);
                 if is_axis_event {
                     axis_state
-                        .route_wheels(
-                            &mut output,
-                            |code| MAPPED_KEYS.lock().contains(&code),
-                            |code| {
-                                try_send_panic(&preprocess_tx, KeyEvent::new(code, KeyValue::Tap));
-                                Ok(())
-                            },
-                        )
+                        .route_wheels(&mut output, snapshot.wheels, |code| {
+                            try_send_panic(&preprocess_tx, KeyEvent::new(code, KeyValue::Tap));
+                            Ok(())
+                        })
                         .expect("route wheel taps");
                     if output.iter().any(|value| *value != 0) {
                         axis_injection_tx
@@ -174,7 +170,11 @@ impl Kanata {
                     Ok(ev) => ev,
                     _ => return false,
                 };
-                if !MAPPED_KEYS.lock().contains(&key_event.code) {
+                if !(if WheelMask::is_wheel(key_event.code) {
+                    snapshot.wheels.contains(key_event.code)
+                } else {
+                    MAPPED_KEYS.lock().contains(&key_event.code)
+                }) {
                     return false;
                 }
                 try_send_panic(&preprocess_tx, key_event);

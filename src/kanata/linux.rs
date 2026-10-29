@@ -11,7 +11,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender as Sender;
 
-use super::mouse_axis::{AXIS_COUNT, AxisState, AxisValues, MouseAxis};
+use super::mouse_axis::{AXIS_COUNT, AxisState, AxisValues, MotionSnapshot, MouseAxis, WheelMask};
 use super::*;
 
 impl Kanata {
@@ -23,7 +23,7 @@ impl Kanata {
         let k = kanata.lock();
         let allow_hardware_repeat = k.allow_hardware_repeat;
         let mouse_movement_key = k.mouse_movement_key.clone();
-        let mouse_axis_map = k.mouse_axis_map.clone();
+        let motion_snapshot = k.motion_snapshot.clone();
         let mut kbd_in = match KbdIn::new(
             &k.kbd_in_paths,
             k.continue_if_no_devices,
@@ -50,18 +50,14 @@ impl Kanata {
             for report in events.split_inclusive(|ev| {
                 ev.event_type() == EventType::SYNCHRONIZATION && ev.code() == 0
             }) {
-                let map = *mouse_axis_map.lock();
-                // Keep identity passthrough native. Reconfigure even when
-                // disabled, so old fractions cannot leak through a later map.
-                if map.is_identity() {
-                    axis_state.apply(map, [0; AXIS_COUNT]);
-                }
+                let snapshot = motion_snapshot.lock().clone();
+                let map = snapshot.map;
+                axis_state.observe_snapshot(&snapshot);
                 let mut transformed = if !map.is_identity() {
                     Some(map_axis_report(
                         &mut axis_state,
-                        map,
+                        &snapshot,
                         report,
-                        |code| MAPPED_KEYS.lock().contains(&code),
                         |code| {
                             tx.try_send(KeyEvent::new(code, KeyValue::Tap))?;
                             Ok(())
@@ -117,7 +113,13 @@ impl Kanata {
 
                     if key_event.value == KeyValue::Tap {
                         // Scroll event for sure. Only scroll events produce Tap.
-                        if !handle_scroll(&kanata, in_event, key_event.code, report)? {
+                        if !handle_scroll(
+                            &kanata,
+                            in_event,
+                            key_event.code,
+                            report,
+                            snapshot.wheels,
+                        )? {
                             continue;
                         }
                     }
@@ -135,7 +137,9 @@ impl Kanata {
                     // Handle normal keypresses.
                     // Check if this keycode is mapped in the configuration.
                     // If it hasn't been mapped, send it immediately.
-                    if !MAPPED_KEYS.lock().contains(&key_event.code) {
+                    if !WheelMask::is_wheel(key_event.code)
+                        && !MAPPED_KEYS.lock().contains(&key_event.code)
+                    {
                         let mut kanata = kanata.lock();
                         #[cfg(not(feature = "simulated_output"))]
                         kanata
@@ -230,11 +234,11 @@ fn axis_code(axis: MouseAxis) -> RelativeAxisCode {
 
 fn map_axis_report(
     state: &mut AxisState,
-    map: MouseAxisMap,
+    snapshot: &MotionSnapshot,
     report: &[InputEvent],
-    is_mapped: impl Fn(OsCode) -> bool,
     tap: impl FnMut(OsCode) -> Result<()>,
 ) -> Result<Vec<InputEvent>> {
+    state.observe_snapshot(snapshot);
     let mut input: AxisValues = [0; AXIS_COUNT];
     let mut high_resolution = [false; AXIS_COUNT];
     for event in report {
@@ -257,8 +261,8 @@ fn map_axis_report(
         }
         input[axis as usize] = input[axis as usize].saturating_add(delta);
     }
-    let mut output = state.apply(map, input);
-    state.route_wheels(&mut output, is_mapped, tap)?;
+    let mut output = state.apply(input);
+    state.route_wheels(&mut output, snapshot.wheels, tap)?;
     let mut events = Vec::new();
     for axis in MouseAxis::ALL {
         let value = output[axis as usize];
@@ -291,6 +295,7 @@ fn handle_scroll(
     in_event: InputEvent,
     code: OsCode,
     all_events: &[InputEvent],
+    wheels: WheelMask,
 ) -> Result<bool> {
     let direction: MWheelDirection = code.try_into().unwrap();
     let scroll_distance = in_event.value().unsigned_abs() as u16;
@@ -298,7 +303,7 @@ fn handle_scroll(
         EventSummary::RelativeAxis(_, axis_type, _) => {
             match axis_type {
                 RelativeAxisCode::REL_WHEEL | RelativeAxisCode::REL_HWHEEL => {
-                    if MAPPED_KEYS.lock().contains(&code) {
+                    if wheels.contains(code) {
                         return Ok(true);
                     }
                     // If we just used `write_raw` here, some of the scrolls issued by kanata would be
@@ -331,7 +336,7 @@ fn handle_scroll(
                     Ok(false)
                 }
                 RelativeAxisCode::REL_WHEEL_HI_RES | RelativeAxisCode::REL_HWHEEL_HI_RES => {
-                    if !MAPPED_KEYS.lock().contains(&code) {
+                    if !wheels.contains(code) {
                         // Passthrough if the scroll wheel event is not mapped
                         // in the configuration.
                         let mut kanata = kanata.lock();
@@ -374,13 +379,12 @@ mod axis_tests {
         map.rows[MouseAxis::Y as usize][MouseAxis::V as usize] = -0.25;
         let events = map_axis_report(
             &mut AxisState::default(),
-            map,
+            &MotionSnapshot::initial(map, WheelMask::default()),
             &[
                 rel(RelativeAxisCode::REL_WHEEL, 1),
                 rel(RelativeAxisCode::REL_WHEEL_HI_RES, 120),
                 rel(RelativeAxisCode::REL_HWHEEL, 2),
             ],
-            |_| false,
             |_| unreachable!(),
         )
         .unwrap();
@@ -398,13 +402,12 @@ mod axis_tests {
         map.rows[MouseAxis::Rz as usize][MouseAxis::H as usize] = -1.0;
         let events = map_axis_report(
             &mut AxisState::default(),
-            map,
+            &MotionSnapshot::initial(map, WheelMask::default()),
             &[
                 rel(RelativeAxisCode::REL_Z, 3),
                 rel(RelativeAxisCode::REL_DIAL, 1),
                 rel(RelativeAxisCode::REL_HWHEEL_HI_RES, 60),
             ],
-            |_| false,
             |_| unreachable!(),
         )
         .unwrap();
@@ -422,12 +425,11 @@ mod axis_tests {
         map.rows[MouseAxis::V as usize][MouseAxis::Y as usize] = -120.0;
         map_axis_report(
             &mut AxisState::default(),
-            map,
+            &MotionSnapshot::initial(map, WheelMask::new(|_| true)),
             &[
                 rel(RelativeAxisCode::REL_X, 1),
                 rel(RelativeAxisCode::REL_Y, 1),
             ],
-            |_| true,
             |_| panic!("equal contributions must cancel"),
         )
         .unwrap();
@@ -445,9 +447,8 @@ mod axis_tests {
         let mut state = AxisState::default();
         let up = map_axis_report(
             &mut state,
-            map,
+            &MotionSnapshot::initial(map, WheelMask::default()),
             &[rel(RelativeAxisCode::REL_WHEEL_HI_RES, 120)],
-            |_| false,
             |_| unreachable!(),
         )
         .unwrap();
@@ -455,9 +456,8 @@ mod axis_tests {
         assert_eq!(value(&up, RelativeAxisCode::REL_WHEEL_HI_RES), 0);
         let down = map_axis_report(
             &mut state,
-            map,
+            &MotionSnapshot::initial(map, WheelMask::default()),
             &[rel(RelativeAxisCode::REL_WHEEL_HI_RES, -120)],
-            |_| false,
             |_| unreachable!(),
         )
         .unwrap();

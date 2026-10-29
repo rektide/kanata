@@ -5,20 +5,111 @@ use anyhow::Result;
 use kanata_parser::keys::OsCode;
 use kanata_parser::mouse_axis::MouseAxisTransform;
 pub(crate) use kanata_parser::mouse_axis::{AXIS_COUNT, AxisValues, MouseAxis, MouseAxisMap};
+use std::sync::Arc;
+
+/// Routing belongs to the same generation as the coefficients, not to a mutable
+/// global key table consulted partway through a native report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct WheelMask([bool; 4]);
+
+impl WheelMask {
+    pub fn new(is_mapped: impl Fn(OsCode) -> bool) -> Self {
+        Self(Self::CODES.map(is_mapped))
+    }
+
+    const CODES: [OsCode; 4] = [
+        OsCode::MouseWheelUp,
+        OsCode::MouseWheelDown,
+        OsCode::MouseWheelRight,
+        OsCode::MouseWheelLeft,
+    ];
+
+    pub fn contains(self, code: OsCode) -> bool {
+        Self::CODES
+            .iter()
+            .position(|&c| c == code)
+            .is_some_and(|i| self.0[i])
+    }
+
+    pub fn is_wheel(code: OsCode) -> bool {
+        Self::CODES.contains(&code)
+    }
+}
+
+/// Immutable, acquired once per native report. Epochs retain discontinuities
+/// even if a device is inactive across A -> B -> A. Publication locks are never
+/// held while evaluating programs, writing output or sending input events.
+#[derive(Clone, Debug)]
+pub(crate) struct MotionSnapshot {
+    pub map: MouseAxisMap,
+    pub generation: u64,
+    pub output_epochs: [u64; AXIS_COUNT],
+    pub wheels: WheelMask,
+}
+
+impl MotionSnapshot {
+    pub fn initial(map: MouseAxisMap, wheels: WheelMask) -> Self {
+        Self {
+            map,
+            generation: 1,
+            output_epochs: [1; AXIS_COUNT],
+            wheels,
+        }
+    }
+
+    pub fn next(&self, map: MouseAxisMap, wheels: WheelMask, reload: bool) -> Arc<Self> {
+        Arc::new(Self {
+            map,
+            wheels,
+            generation: if reload {
+                self.generation
+                    .checked_add(1)
+                    .expect("motion generation exhausted")
+            } else {
+                self.generation
+            },
+            output_epochs: std::array::from_fn(|i| {
+                if reload || !self.map.output_eq(&map, MouseAxis::ALL[i]) {
+                    self.output_epochs[i]
+                        .checked_add(1)
+                        .expect("motion output epoch exhausted")
+                } else {
+                    self.output_epochs[i]
+                }
+            }),
+        })
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct AxisState {
     pub transform: MouseAxisTransform,
     pub wheel_key_remainder: [i32; 2],
     pub wheel_raw_remainder: [i32; 2],
+    observed: Option<(u64, [u64; AXIS_COUNT])>,
 }
 
 impl AxisState {
-    pub fn apply(&mut self, map: MouseAxisMap, input: AxisValues) -> AxisValues {
-        if self.transform.reconfigure(map) {
-            self.wheel_key_remainder = [0; 2];
-            self.wheel_raw_remainder = [0; 2];
+    /// Must run before identity and all other early-return paths. This is the
+    /// sole reset authority; do not follow it with legacy all-map reconfigure.
+    pub fn observe_snapshot(&mut self, snapshot: &MotionSnapshot) {
+        for axis in MouseAxis::ALL {
+            let i = axis as usize;
+            if self.observed.is_none_or(|(generation, epochs)| {
+                generation != snapshot.generation || epochs[i] != snapshot.output_epochs[i]
+            }) {
+                self.transform.remainder[i] = 0.0;
+                if let Some(wheel) = MouseAxis::WHEELS.iter().position(|&a| a == axis) {
+                    self.wheel_key_remainder[wheel] = 0;
+                    self.wheel_raw_remainder[wheel] = 0;
+                }
+            }
         }
+        self.transform.map = snapshot.map;
+        self.observed = Some((snapshot.generation, snapshot.output_epochs));
+    }
+
+    pub fn apply(&mut self, input: AxisValues) -> AxisValues {
         self.transform.apply(input)
     }
 
@@ -27,7 +118,7 @@ impl AxisState {
     pub fn route_wheels(
         &mut self,
         output: &mut AxisValues,
-        is_mapped: impl Fn(OsCode) -> bool,
+        wheels: WheelMask,
         mut tap: impl FnMut(OsCode) -> Result<()>,
     ) -> Result<()> {
         for (index, axis) in MouseAxis::WHEELS.into_iter().enumerate() {
@@ -36,7 +127,7 @@ impl AxisState {
                 continue;
             }
             let code = axis.wheel_code(delta > 0).unwrap();
-            if is_mapped(code) {
+            if wheels.contains(code) {
                 let total = i64::from(self.wheel_key_remainder[index]) + i64::from(delta);
                 let notches = total / 120;
                 self.wheel_key_remainder[index] = (total % 120) as i32;
@@ -71,20 +162,18 @@ mod tests {
         let mut map = MouseAxisMap::default();
         map.rows[MouseAxis::V as usize][MouseAxis::V as usize] = 0.5;
         map.rows[MouseAxis::H as usize][MouseAxis::V as usize] = -1.0;
+        let snapshot = MotionSnapshot::initial(map, WheelMask::new(|_| true));
+        state.observe_snapshot(&snapshot);
         let mut input = [0; AXIS_COUNT];
         input[MouseAxis::V as usize] = 120;
         let mut taps = vec![];
         for _ in 0..2 {
-            let mut output = state.apply(map, input);
+            let mut output = state.apply(input);
             state
-                .route_wheels(
-                    &mut output,
-                    |_| true,
-                    |code| {
-                        taps.push(code);
-                        Ok(())
-                    },
-                )
+                .route_wheels(&mut output, snapshot.wheels, |code| {
+                    taps.push(code);
+                    Ok(())
+                })
                 .unwrap();
             assert_eq!(output, [0; AXIS_COUNT]);
         }
@@ -99,8 +188,10 @@ mod tests {
     }
 
     #[test]
-    fn signed_wheel_remainders_cancel_and_reset_on_map_change() {
+    fn signed_wheel_remainders_cancel_and_preserve_on_pointer_change() {
         let mut state = AxisState::default();
+        let snapshot = MotionSnapshot::initial(MouseAxisMap::default(), WheelMask::default());
+        state.observe_snapshot(&snapshot);
         assert_eq!(state.wheel_notches(0, 90), 0);
         assert_eq!(state.wheel_notches(0, -90), 0);
         assert_eq!(state.wheel_notches(0, -60), 0);
@@ -108,7 +199,53 @@ mod tests {
         state.wheel_notches(0, 90);
         let mut map = MouseAxisMap::default();
         map.rows[0][0] = -1.0;
-        state.apply(map, [0; AXIS_COUNT]);
-        assert_eq!(state.wheel_notches(0, 30), 0);
+        state.observe_snapshot(&snapshot.next(map, snapshot.wheels, false));
+        assert_eq!(state.wheel_notches(0, 30), 1);
+    }
+
+    #[test]
+    fn selective_epochs_survive_unobserved_round_trip_and_equal_reload() {
+        let mut map = MouseAxisMap::default();
+        map.rows[0][0] = 0.25;
+        let a = MotionSnapshot::initial(map, WheelMask::default());
+        let mut state = AxisState::default();
+        state.observe_snapshot(&a);
+        state.apply([1; AXIS_COUNT]);
+        state.wheel_key_remainder = [37, -42];
+        state.wheel_raw_remainder = [22, 61];
+        let mut b_map = map;
+        b_map.rows[0][0] = 0.5;
+        let b = a.next(b_map, a.wheels, false);
+        let a_again = b.next(map, a.wheels, false);
+        state.observe_snapshot(&a_again);
+        assert_eq!(state.transform.remainder[0], 0.0);
+        assert_eq!(state.wheel_key_remainder, [37, -42]);
+        assert_eq!(state.wheel_raw_remainder, [22, 61]);
+        let mut unused = map;
+        unused.negative_rows[0][0] = 999.0;
+        let same = a_again.next(unused, a.wheels, false);
+        assert_eq!(same.output_epochs, a_again.output_epochs);
+        state.transform.remainder[0] = 0.75;
+        state.observe_snapshot(&same);
+        assert_eq!(state.transform.remainder[0], 0.75);
+        let reload = same.next(map, a.wheels, true);
+        state.observe_snapshot(&reload);
+        assert_eq!(state.transform.remainder, [0.0; AXIS_COUNT]);
+        assert_eq!(state.wheel_key_remainder, [0; 2]);
+        assert_eq!(state.wheel_raw_remainder, [0; 2]);
+    }
+
+    #[test]
+    fn changed_wheel_resets_both_notch_credits_only_for_that_wheel() {
+        let a = MotionSnapshot::initial(MouseAxisMap::default(), WheelMask::default());
+        let mut state = AxisState::default();
+        state.observe_snapshot(&a);
+        state.wheel_key_remainder = [5, 6];
+        state.wheel_raw_remainder = [7, 8];
+        let mut map = a.map;
+        map.rows[MouseAxis::H as usize][0] = 3.0;
+        state.observe_snapshot(&a.next(map, a.wheels, false));
+        assert_eq!(state.wheel_key_remainder, [5, 0]);
+        assert_eq!(state.wheel_raw_remainder, [7, 0]);
     }
 }
