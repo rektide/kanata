@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Records per-cell and blanket layer-operation requirements and connects the commissioned inheritance proposal and deferred animation desire
+    title: Records per-cell and blanket requirements and reviews and connects the inheritance proposal, scope addendum and deferred animation desire
   - resource: /docs/config.adoc
     title: Implemented global linear and directional axis-map configuration
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
@@ -17,6 +17,8 @@ sources:
     title: Commissioned null/set/add/multiply layer semantics and deferred animation sketch
   - resource: /design/mouse-axis/layer-transform-design0.gpt6a.md
     title: Astra-high proposal for sparse gain/coefficient operations, full-stack resolution and report/state boundaries
+  - resource: /design/mouse-axis/layer-transform-scope0.gpt6a.md
+    title: Astra-high refinement of family-local blanket defaults, explicit cell operations and null exclusions
 ---
 
 # Mouse and relative-input transform design
@@ -48,8 +50,13 @@ Starting examples:
   cover the parameter model, full active-stack precedence and runtime state
   boundaries; these remain proposals for human selection.
 - [Cell and blanket scope clarification](layer-transform-ask0.gpt6a.md#cell-and-blanket-scope):
-  individual coefficient edits are already in the proposal; an explicit blanket
-  operation and its interaction with cell-level exceptions need a design refinement.
+  preserves the human request for both individual coefficient edits and blanket
+  application.
+- [Blanket and cell addendum](layer-transform-scope0.gpt6a.md): recommends a
+  family-local blanket default, overridden by explicit cell operations; explicit
+  null excludes a cell, while omission accepts the blanket. Every selected
+  operation uses the pre-layer inherited value. This refines the first proposal's
+  omitted/null equivalence and awaits selection of that rule.
 
 ## Deferred animation desire
 

@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human commissions sparse per-cell and blanket layer operations and defers animation; parent records scope clarifications and connects the Astra-high proposal
+    title: Human commissions per-cell and blanket layer operations and defers animation; parent records clarifications and connects the Astra-high proposal and scope refinement
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -23,6 +23,8 @@ sources:
     title: Existing distinction between generated axes, source identity and output endpoints
   - resource: /design/mouse-axis/layer-transform-design0.gpt6a.md
     title: Completed independent Astra-high response to this commission, pending selection of its proposed semantics
+  - resource: /design/mouse-axis/layer-transform-scope0.gpt6a.md
+    title: Focused response to the blanket-operation request, recommending cell replacement and explicit null exclusions
 ---
 
 # Layer-controlled input transforms and deferred animation desire
@@ -125,6 +127,13 @@ Resolve these interactions explicitly:
 The operation still matters: adding to all coefficients can create routes from
 zero off-diagonal cells; multiplying all coefficients preserves those zeros.
 These are parameter operations, not full matrix multiplication.
+
+The resulting [Astra-high scope addendum](layer-transform-scope0.gpt6a.md)
+recommends selecting one operation per cell per layer: explicit cell operation
+(including null), otherwise family blanket, otherwise inheritance. The selected
+operation acts on the pre-layer inherited value. Under this proposed refinement,
+omission accepts a blanket while explicit null exempts the cell. This is the
+recommended answer to the questions above, pending human selection.
 
 ## Questions for the layer proposal
 
