@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Reviews readiness and the implemented algebra/parser interfaces, approves reload preflight policy and commissions fresh Sol xhigh runtime integration
+    title: Reviews the delivered runtime and commissions an identity-path wheel-continuity regression, while adding a minimal physical pointer speed example
   - resource: /docs/config.adoc
     title: Implemented global linear and directional axis-map configuration
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
@@ -25,6 +25,8 @@ sources:
     title: Code-grounded Astra readiness review, integration interfaces and staged implementation handoff
   - resource: /design/mouse-axis/layer-transform-implementation0.gpt61s.md
     title: Sol xhigh stage-one implementation receipt and verified parser/algebra contracts
+  - resource: /design/mouse-axis/layer-transform-implementation1.gpt61s.md
+    title: Delivered native/runtime integration, examples, verification results and hardware limits
 ---
 
 # Mouse and relative-input transform design
@@ -33,7 +35,7 @@ sources:
 
 The [configuration reference](/docs/config.adoc), section `mouse-axis-map`,
 owns implemented behavior: global linear maps, optional independent directions,
-mixing/scaling and Linux's extended native relative channels.
+mixing/scaling, Linux's extended native relative channels and layer programs.
 
 Starting examples:
 
@@ -41,8 +43,25 @@ Starting examples:
 - [Wheel input driving pointer X/Y](/cfg_samples/mouse-axis-wheel-pointer.kbd).
 - [Output axes absent from the physical mouse](/cfg_samples/mouse-axis-generated.kbd).
 - [Independent directional branches](/cfg_samples/mouse-axis-directional.kbd).
+- [Minimal pointer precision/boost layers](/cfg_samples/mouse-axis-layer-speed.kbd):
+  hold F1 for quarter speed, F2 for double speed, both for half speed; no rotation
+  or wheel remapping. Parser-only validation passed in the parent session.
+- [Layer programs with rotation and virtual control](/cfg_samples/mouse-axis-layers.kbd).
+- [Matrix edits](/cfg_samples/mouse-axis-layer-matrix.kbd),
+  [true products](/cfg_samples/mouse-axis-layer-products.kbd), and
+  [directional layer products](/cfg_samples/mouse-axis-layer-directional.kbd).
 
-## Layer-controlled transforms — implementation underway
+## Layer-controlled transforms — delivered, final adapter review underway
+
+- [Runtime integration receipt](layer-transform-implementation1.gpt61s.md):
+  typed public headers, full-stack resolution, immutable snapshots and selective
+  epochs, frozen capture plans, preflighted reloads, checked examples and native
+  adapter integration. It records executed tests versus cross-compilation and
+  the remaining physical-device verification limits.
+- Parent review identified an identity/transformed wheel-accounting boundary:
+  pointer-only layer changes should preserve partial wheel credit even when the
+  effective map becomes identity. A fresh Sol-xhigh session is verifying and
+  correcting that boundary with native-adapter regressions before final delivery.
 
 - [Implementation commission](layer-transform-ask0.gpt6a.md#implementation-commission):
   the human requests Astra-high readiness and implementation notes, followed by
@@ -56,9 +75,8 @@ Starting examples:
   Sol xhigh delivered validated nullable operands and numeric factors, checked
   ordered evaluation, owned provenance and nested variable-aware parsing.
   Parent interface review found no blocker; the receipt records the focused
-  checks. Public layer syntax remains gated until runtime wiring is coherent.
-  A fresh Sol-xhigh session is implementing the remaining resolver, snapshots,
-  capture/reload handling, adapters and user-facing examples.
+  checks. Public layer syntax was gated at that checkpoint and is now connected
+  by the runtime integration above.
 
 - [Latest scope direction](layer-transform-ask0.gpt6a.md#cell-matrix-scalar):
   cell, matrix and scalar operands should coexist, with coefficient-wise

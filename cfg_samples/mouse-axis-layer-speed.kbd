@@ -1,0 +1,19 @@
+;; Physical pointer speed on Linux/Windows; no rotation or wheel remapping.
+;; Hold F1 for quarter-speed X/Y, F2 for double-speed X/Y.
+;; Hold both for half-speed: 0.25 * 2. Release to restore normal speed.
+;; These layers affect physical input, not generated movemouse actions.
+(defcfg
+  process-unmapped-keys no
+  delegate-to-first-layer yes
+)
+(defsrc f1 f2)
+(deflayer base
+  (layer-while-held precision)
+  (layer-while-held boost)
+)
+(deflayer (precision mouse-axis (
+  (mul-elements (scalar 0.25 (outputs x y)))
+)) _ _)
+(deflayer (boost mouse-axis (
+  (mul-elements (scalar 2 (outputs x y)))
+)) _ _)

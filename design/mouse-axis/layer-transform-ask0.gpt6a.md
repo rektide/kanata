@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human commissions Sol xhigh after Astra notes; parent approves reload policy, reviews the implemented parser/algebra and dispatches fresh runtime integration
+    title: Human commissions Sol xhigh after Astra notes; parent reviews delivered interfaces and runtime, approves reload policy and commissions a targeted wheel-continuity correction
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -31,6 +31,8 @@ sources:
     title: Astra's concrete readiness assessment and implementation handoff
   - resource: /design/mouse-axis/layer-transform-implementation0.gpt61s.md
     title: Completed and verified first Sol implementation checkpoint
+  - resource: /design/mouse-axis/layer-transform-implementation1.gpt61s.md
+    title: Delivered runtime integration and verification receipt
 ---
 
 # Layer-controlled input transforms and deferred animation desire
@@ -248,12 +250,14 @@ Parent review inspected the implementation and test coverage, confirming that
 nullable edits and numeric factors are separately validated, products read old
 matrix values, source records are owned and thread-shareable, and full-stack
 ordering is available independently of keyboard transparency. No interface
-blocker was found. Public layer syntax is deliberately still gated.
+blocker was found. Public layer syntax was deliberately gated at that checkpoint.
 
-A fresh Sol-xhigh session is commissioned for the remaining native/runtime
-integration and usable examples. The complete requested feature includes
-publication, capture and state behavior; the parser checkpoint alone is not
-feature completion.
+The subsequent [runtime integration](layer-transform-implementation1.gpt61s.md)
+now connects public layer programs through publication, capture and state
+behavior, with checked examples. Parent review is completing an additional
+adapter-level check: switching between identity and pointer-only precision must
+preserve partial wheel accounting. A focused Sol-xhigh correction is commissioned
+for that boundary; the receipt's physical-device verification limits remain.
 
 ## Questions for the layer proposal
 
