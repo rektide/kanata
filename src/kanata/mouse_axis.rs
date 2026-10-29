@@ -1,11 +1,16 @@
 //! Shared analog-axis state. OS adapters retain report boundaries and normalize
 //! wheel units before this transform, then encode the resulting native outputs.
 
+use super::Kanata;
 use anyhow::Result;
+use kanata_parser::cfg::{Cfg, LayerInfo};
 use kanata_parser::keys::OsCode;
 use kanata_parser::mouse_axis::MouseAxisTransform;
+use kanata_parser::mouse_axis::program::{CaptureRequirements, canonical_layer_order};
 pub(crate) use kanata_parser::mouse_axis::{AXIS_COUNT, AxisValues, MouseAxis, MouseAxisMap};
 use std::sync::Arc;
+
+pub(crate) mod capture;
 
 /// Routing belongs to the same generation as the coefficients, not to a mutable
 /// global key table consulted partway through a native report.
@@ -78,6 +83,191 @@ impl MotionSnapshot {
                 }
             }),
         })
+    }
+}
+
+pub(crate) struct PreparedMotion {
+    baseline: MouseAxisMap,
+    stack: Vec<u16>,
+    pub map: MouseAxisMap,
+    pub wheels: WheelMask,
+    pub required: CaptureRequirements,
+}
+
+impl PreparedMotion {
+    pub fn new(cfg: &mut Cfg, generation: u64) -> Result<Self> {
+        let baseline = cfg.options.mouse_axis_map;
+        let layout = cfg.layout.bm();
+        let stack = canonical_layer_order(layout.active_held_layers(), layout.default_layer as u16);
+        let map = resolve(&baseline, &cfg.layer_info, &stack, generation)?;
+        log_program_order(&cfg.layer_info, &stack);
+        let required = CaptureRequirements::for_programs(
+            &baseline,
+            cfg.layer_info.iter().map(|l| &l.mouse_axis),
+        );
+        Ok(Self {
+            baseline,
+            stack,
+            map,
+            wheels: WheelMask::new(|c| cfg.mapped_keys.contains(&c)),
+            required,
+        })
+    }
+}
+
+pub(crate) struct MotionResolver {
+    baseline: MouseAxisMap,
+    stack: Vec<u16>,
+    current: Arc<MotionSnapshot>,
+}
+
+fn resolve(
+    baseline: &MouseAxisMap,
+    layers: &[LayerInfo],
+    stack: &[u16],
+    generation: u64,
+) -> Result<MouseAxisMap> {
+    kanata_parser::cfg::resolve_motion(baseline, layers, stack)
+        .map_err(|error| anyhow::anyhow!("motion generation {generation}: {error}"))
+}
+
+impl MotionResolver {
+    pub fn initial(prepared: PreparedMotion) -> Self {
+        Self {
+            baseline: prepared.baseline,
+            stack: prepared.stack,
+            current: Arc::new(MotionSnapshot::initial(prepared.map, prepared.wheels)),
+        }
+    }
+
+    pub fn publication(&self) -> Arc<MotionSnapshot> {
+        self.current.clone()
+    }
+
+    pub fn install(&mut self, prepared: PreparedMotion) -> Arc<MotionSnapshot> {
+        log_coefficient_changes(&self.current.map, &prepared.map);
+        self.current = self.current.next(prepared.map, prepared.wheels, true);
+        self.baseline = prepared.baseline;
+        self.stack = prepared.stack;
+        log::debug!(
+            "motion reload generation {}, canonical stack {:?}, all outputs reset",
+            self.current.generation,
+            self.stack
+        );
+        self.publication()
+    }
+}
+
+fn log_coefficient_changes(before: &MouseAxisMap, after: &MouseAxisMap) {
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+    // Detailed instruction/product provenance is available by replaying
+    // MotionProgram::explain_cell, off the native report/publication-lock path.
+    let mut shown = 0;
+    for output in MouseAxis::ALL {
+        for input in MouseAxis::ALL {
+            let o = output as usize;
+            let i = input as usize;
+            for (branch, old, new) in [
+                ("+", before.rows[o][i], after.rows[o][i]),
+                ("-", before.negative_rows[o][i], after.negative_rows[o][i]),
+            ] {
+                if branch == "-"
+                    && after.mode == kanata_parser::mouse_axis::MouseAxisMapMode::Linear
+                {
+                    continue;
+                }
+                if old != new && shown < 8 {
+                    log::debug!(
+                        "motion {} <- {}{branch}: {old} -> {new}",
+                        output.name(),
+                        input.name()
+                    );
+                    shown += 1;
+                }
+            }
+        }
+    }
+}
+
+fn log_program_order(layers: &[LayerInfo], stack: &[u16]) {
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+    let mut count = 0;
+    for &id in stack {
+        let layer = &layers[usize::from(id)];
+        for (index, instruction) in layer.mouse_axis.instructions().iter().enumerate() {
+            if count == 8 {
+                log::debug!(
+                    "motion instruction summary truncated; immutable programs retain full provenance"
+                );
+                return;
+            }
+            log::debug!(
+                "motion layer {id} ({:.96}), instruction {} {} at {}",
+                layer.name,
+                index + 1,
+                instruction.operation.name(),
+                instruction.source.use_site
+            );
+            count += 1;
+        }
+    }
+}
+
+impl Kanata {
+    pub(crate) fn refresh_motion(&mut self) -> Result<()> {
+        let layout = self.layout.bm();
+        let stack = canonical_layer_order(layout.active_held_layers(), layout.default_layer as u16);
+        if stack == self.motion.stack {
+            return Ok(());
+        }
+        let map = resolve(
+            &self.motion.baseline,
+            &self.layer_info,
+            &stack,
+            self.motion.current.generation,
+        )?;
+        let next = self
+            .motion
+            .current
+            .next(map, self.motion.current.wheels, false);
+        log::debug!(
+            "motion generation {} stack {:?} -> {:?}, changed outputs {:?}",
+            next.generation,
+            self.motion.stack,
+            stack,
+            MouseAxis::ALL
+                .into_iter()
+                .filter(|&axis| !map.output_eq(&self.motion.current.map, axis))
+                .collect::<Vec<_>>()
+        );
+        log_coefficient_changes(&self.motion.current.map, &map);
+        log_program_order(&self.layer_info, &stack);
+        self.motion.stack = stack;
+        self.motion.current = next.clone();
+        *self.motion_snapshot.lock() = next;
+        Ok(())
+    }
+
+    pub(crate) fn prepare_motion_reload(&self, cfg: &mut Cfg) -> Result<PreparedMotion> {
+        let prepared = PreparedMotion::new(cfg, self.motion.current.generation + 1)?;
+        self.motion_capture
+            .validate(prepared.required, &cfg.options)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "motion generation {}, canonical stack {:?}, required inputs {:?}: {error}",
+                    self.motion.current.generation + 1,
+                    prepared.stack,
+                    MouseAxis::ALL
+                        .into_iter()
+                        .filter(|&axis| prepared.required.inputs[axis as usize])
+                        .collect::<Vec<_>>()
+                )
+            })?;
+        Ok(prepared)
     }
 }
 
@@ -248,4 +438,37 @@ mod tests {
         assert_eq!(state.wheel_key_remainder, [5, 0]);
         assert_eq!(state.wheel_raw_remainder, [7, 0]);
     }
+
+    #[test]
+    fn independent_devices_observe_negative_branch_changes_and_mode_discontinuities() {
+        use kanata_parser::mouse_axis::MouseAxisMapMode;
+        let a = MotionSnapshot::initial(
+            MouseAxisMap {
+                mode: MouseAxisMapMode::Directional,
+                ..Default::default()
+            },
+            WheelMask::default(),
+        );
+        let mut devices = [AxisState::default(), AxisState::default()];
+        for device in &mut devices {
+            device.observe_snapshot(&a);
+            device.transform.remainder = [0.5; AXIS_COUNT];
+        }
+        let mut map = a.map;
+        map.negative_rows[0][0] = -0.25;
+        let b = a.next(map, a.wheels, false);
+        devices[0].observe_snapshot(&b);
+        assert_eq!(devices[0].transform.remainder[0], 0.0);
+        assert_eq!(devices[0].transform.remainder[1], 0.5);
+        let again = b.next(a.map, a.wheels, false);
+        devices[1].observe_snapshot(&again);
+        assert_eq!(devices[1].transform.remainder[0], 0.0);
+        assert_eq!(devices[1].transform.remainder[1], 0.5);
+        let linear = again.next(MouseAxisMap::default(), a.wheels, false);
+        devices[1].observe_snapshot(&linear);
+        assert_eq!(devices[1].transform.remainder, [0.0; AXIS_COUNT]);
+    }
 }
+
+#[cfg(all(test, feature = "simulated_output"))]
+mod runtime_tests;

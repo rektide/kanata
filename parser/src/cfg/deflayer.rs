@@ -19,10 +19,11 @@ pub(crate) fn parse_layer_indexes(
     exprs: &[SpannedLayerExprs],
     expected_len: usize,
     vars: &HashMap<String, SExpr>,
+    domain: crate::mouse_axis::program::AxisDomain,
     _lsp_hints: &mut LspHints,
-) -> Result<(LayerIndexes, LayerIcons)> {
+) -> Result<(LayerIndexes, LayerOptionsByName)> {
     let mut layer_indexes = HashMap::default();
-    let mut layer_icons = HashMap::default();
+    let mut layer_options = HashMap::default();
     for (i, expr_type) in exprs.iter().enumerate() {
         let (mut subexprs, expr, do_element_count_check, deflayer_keyword) = match expr_type {
             SpannedLayerExprs::DefsrcMapping(e) => {
@@ -41,10 +42,14 @@ pub(crate) fn parse_layer_indexes(
                 "{deflayer_keyword} requires a layer name after `{deflayer_keyword}` token"
             )
         })?;
-        let (layer_name, _layer_name_span, icon) = {
+        let (layer_name, _layer_name_span, options) = {
             let name = layer_expr.atom(Some(vars));
             match name {
-                Some(name) => (name.to_owned(), layer_expr.span(), None),
+                Some(name) => (
+                    name.to_owned(),
+                    layer_expr.span(),
+                    LayerOptions::empty(domain),
+                ),
                 None => {
                     // unwrap: this **must** be a list due to atom() call above.
                     let list = layer_expr.list(Some(vars)).unwrap();
@@ -56,11 +61,8 @@ pub(crate) fn parse_layer_indexes(
                             layer_expr,
                             "layer name after {deflayer_keyword} must be a string when enclosed within one pair of parentheses"
                         ))?;
-                    let layer_opts = parse_layer_opts(&list[1..])?;
-                    let icon = layer_opts
-                        .get(DEFLAYER_ICON[0])
-                        .map(|icon_s| icon_s.trim_atom_quotes().to_owned());
-                    (name.to_owned(), first.span(), icon)
+                    let options = parse_layer_opts(&list[1..], vars, domain)?;
+                    (name.to_owned(), first.span(), options)
                 }
             }
         };
@@ -113,10 +115,10 @@ pub(crate) fn parse_layer_indexes(
             .insert(layer_name.clone(), _layer_name_span.clone());
 
         layer_indexes.insert(layer_name.clone(), i);
-        layer_icons.insert(layer_name, icon);
+        layer_options.insert(layer_name, options);
     }
 
-    Ok((layer_indexes, layer_icons))
+    Ok((layer_indexes, layer_options))
 }
 
 pub(crate) fn parse_layers(

@@ -70,7 +70,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time;
 
-use self::mouse_axis::{MotionSnapshot, WheelMask};
+use self::mouse_axis::capture::{CapturePlan, CaptureStatus};
+use self::mouse_axis::{MotionResolver, MotionSnapshot, PreparedMotion};
 #[cfg(feature = "tcp_server")]
 use crate::SocketAddrWrapper;
 use crate::ValidatedArgs;
@@ -82,7 +83,7 @@ use kanata_parser::cfg::list_actions::*;
 use kanata_parser::cfg::*;
 use kanata_parser::custom_action::*;
 pub use kanata_parser::keys::*;
-use kanata_parser::mouse_axis::MouseAxisMap;
+use kanata_parser::mouse_axis::program::CaptureRequirements;
 use kanata_tcp_protocol::ServerMessage;
 
 mod clipboard;
@@ -251,7 +252,7 @@ pub struct Kanata {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     /// Linux input paths in the user configuration.
     pub kbd_in_paths: Vec<String>,
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     /// Tracks the user configuration to continue or abort if no devices are found.
     continue_if_no_devices: bool,
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
@@ -357,10 +358,11 @@ pub struct Kanata {
         target_os = "unknown"
     ))]
     pub(crate) mouse_movement_key: Arc<Mutex<Option<OsCode>>>,
-    /// Physical mouse axis mapping (defcfg `mouse-axis-map` or shorthand). Shared with the OS input
-    /// loops so live reload updates the transform they apply to passed-
-    /// through mouse movement and wheel events.
+    /// Coherent physical-motion publication shared with native input loops.
+    /// The processing owner resolves global baseline + canonical layer programs.
     pub(crate) motion_snapshot: Arc<Mutex<Arc<MotionSnapshot>>>,
+    motion: MotionResolver,
+    pub(crate) motion_capture: CaptureStatus,
     /// Whether the loaded config outputs mouse buttons. Gates installing the
     /// macOS mouse event tap (for drag-assist) so configs that never emit mouse
     /// buttons do not request the extra Accessibility / Input Monitoring
@@ -393,16 +395,16 @@ impl From<MoveDirection> for Axis {
 /// macOS does not implement physical mouse axis mapping yet; make that loud
 /// instead of silently ignoring the configuration.
 #[cfg(target_os = "macos")]
-fn warn_unsupported_mouse_axis_map(map: &MouseAxisMap) {
-    if !map.is_identity() {
+fn warn_unsupported_mouse_axis_map(required: CaptureRequirements) {
+    if required.any() {
         log::warn!(
-            "mouse axis mapping (mouse-axis-map or mouse-*-map) \
+            "mouse axis mapping (global maps or layer mouse-axis programs) \
              is not implemented on macOS yet; the configuration is ignored"
         );
     }
 }
 #[cfg(not(target_os = "macos"))]
-fn warn_unsupported_mouse_axis_map(_map: &MouseAxisMap) {}
+fn warn_unsupported_mouse_axis_map(_required: CaptureRequirements) {}
 
 /// Represents reload actions that need to be processed after releasing borrows
 enum ReloadAction {
@@ -445,18 +447,18 @@ const LINUX_PERMISSIONS_ERROR: &str = "Failed to open the output uinput device. 
 
 impl Kanata {
     pub fn new(args: &ValidatedArgs) -> Result<Self> {
-        let cfg = match cfg::new_from_file(&args.paths[0]) {
+        let mut cfg = match cfg::new_from_file(&args.paths[0]) {
             Ok(c) => c,
             Err(e) => {
                 log::error!("{e:?}");
                 bail!("failed to parse file");
             }
         };
-        warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
-        let motion_snapshot = Arc::new(Mutex::new(Arc::new(MotionSnapshot::initial(
-            cfg.options.mouse_axis_map,
-            WheelMask::new(|code| cfg.mapped_keys.contains(&code)),
-        ))));
+        let prepared = PreparedMotion::new(&mut cfg, 1)?;
+        warn_unsupported_mouse_axis_map(prepared.required);
+        let motion_capture = CaptureStatus::pending(CapturePlan::from_cfg(&cfg, prepared.required));
+        let motion = MotionResolver::initial(prepared);
+        let motion_snapshot = Arc::new(Mutex::new(motion.publication()));
 
         let kbd_out = match KbdOut::new(
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -544,8 +546,6 @@ impl Kanata {
             exclude_names: cfg.options.macos_opts.macos_dev_names_exclude,
             #[cfg(any(target_os = "linux", target_os = "android"))]
             kbd_in_paths: cfg.options.linux_opts.linux_dev,
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            continue_if_no_devices: cfg.options.linux_opts.linux_continue_if_no_devs_found,
             #[cfg(target_os = "macos")]
             continue_if_no_devices: cfg.options.macos_opts.macos_continue_if_no_devs_found,
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -620,6 +620,8 @@ impl Kanata {
             ))]
             mouse_movement_key: Arc::new(Mutex::new(cfg.options.mouse_movement_key)),
             motion_snapshot,
+            motion,
+            motion_capture,
             #[cfg(target_os = "macos")]
             emits_mouse_buttons: Arc::new(Mutex::new(cfg.emits_mouse_buttons)),
             #[cfg(feature = "tcp_server")]
@@ -635,17 +637,17 @@ impl Kanata {
     }
 
     pub fn new_from_str(cfg: &str, file_content: HashMap<String, String>) -> Result<Self> {
-        let cfg = match cfg::new_from_str(cfg, file_content) {
+        let mut cfg = match cfg::new_from_str(cfg, file_content) {
             Ok(c) => c,
             Err(e) => {
                 bail!("{e:?}");
             }
         };
-        warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
-        let motion_snapshot = Arc::new(Mutex::new(Arc::new(MotionSnapshot::initial(
-            cfg.options.mouse_axis_map,
-            WheelMask::new(|code| cfg.mapped_keys.contains(&code)),
-        ))));
+        let prepared = PreparedMotion::new(&mut cfg, 1)?;
+        warn_unsupported_mouse_axis_map(prepared.required);
+        let motion_capture = CaptureStatus::pending(CapturePlan::from_cfg(&cfg, prepared.required));
+        let motion = MotionResolver::initial(prepared);
+        let motion_snapshot = Arc::new(Mutex::new(motion.publication()));
 
         let kbd_out = match KbdOut::new(
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -711,8 +713,6 @@ impl Kanata {
             exclude_names: cfg.options.macos_opts.macos_dev_names_exclude,
             #[cfg(any(target_os = "linux", target_os = "android"))]
             kbd_in_paths: cfg.options.linux_opts.linux_dev,
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            continue_if_no_devices: cfg.options.linux_opts.linux_continue_if_no_devs_found,
             #[cfg(target_os = "macos")]
             continue_if_no_devices: cfg.options.macos_opts.macos_continue_if_no_devs_found,
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -788,6 +788,8 @@ impl Kanata {
             ))]
             mouse_movement_key: Arc::new(Mutex::new(cfg.options.mouse_movement_key)),
             motion_snapshot,
+            motion,
+            motion_capture,
             #[cfg(target_os = "macos")]
             emits_mouse_buttons: Arc::new(Mutex::new(cfg.emits_mouse_buttons)),
             #[cfg(feature = "tcp_server")]
@@ -811,6 +813,10 @@ impl Kanata {
     }
 
     pub(crate) fn do_live_reload(&mut self, _tx: &Option<Sender<ServerMessage>>) -> Result<()> {
+        #[cfg(feature = "tcp_server")]
+        {
+            self.last_reload_ok = false;
+        }
         let cfg = match cfg::new_from_file(&self.cfg_paths[self.cur_cfg_idx]) {
             Ok(c) => c,
             Err(e) => {
@@ -822,6 +828,18 @@ impl Kanata {
                 bail!("failed to parse config file");
             }
         };
+        self.install_config(cfg, _tx)
+    }
+
+    fn install_config(&mut self, mut cfg: Cfg, _tx: &Option<Sender<ServerMessage>>) -> Result<()> {
+        #[cfg(feature = "tcp_server")]
+        {
+            self.last_reload_ok = false;
+        }
+        // Every new motion failure precedes output reconfiguration and live
+        // mutation. Pending startup uses the frozen plan, never today's matrix.
+        let prepared = self.prepare_motion_reload(&mut cfg)?;
+        warn_unsupported_mouse_axis_map(prepared.required);
         update_kbd_out(&cfg.options, &self.kbd_out)?;
         #[cfg(target_os = "windows")]
         set_win_altgr_behaviour(cfg.options.windows_opts.windows_altgr);
@@ -832,6 +850,8 @@ impl Kanata {
         self.layout = cfg.layout;
         self.key_outputs = cfg.key_outputs;
         self.layer_info = cfg.layer_info;
+        let snapshot = self.motion.install(prepared);
+        *self.motion_snapshot.lock() = snapshot;
         self.sequences = cfg.sequences;
         self.overrides = cfg.overrides;
         self.log_layer_changes =
@@ -926,32 +946,6 @@ impl Kanata {
         self.prev_layer = cur_layer;
         self.print_layer(cur_layer);
         self.macro_on_press_cancel_duration = 0;
-
-        #[cfg(target_os = "windows")]
-        if self.motion_snapshot.lock().map.is_identity()
-            && !cfg.options.mouse_axis_map.is_identity()
-        {
-            log::warn!(
-                "If mouse input was not enabled at startup, restart Kanata to enable axis mapping."
-            );
-        }
-        #[cfg(all(target_os = "windows", feature = "interception_driver"))]
-        if !self.motion_snapshot.lock().map.maps_movement()
-            && cfg.options.mouse_axis_map.maps_movement()
-            && self.mouse_movement_key.lock().is_none()
-        {
-            log::warn!(
-                "If relative movement interception was not enabled at startup, restart Kanata to map movement axes."
-            );
-        }
-        // This update also belongs to LLHOOK, which has no mouse_movement_key.
-        let wheels = WheelMask::new(|code| MAPPED_KEYS.lock().contains(&code));
-        let snapshot = self
-            .motion_snapshot
-            .lock()
-            .next(cfg.options.mouse_axis_map, wheels, true);
-        *self.motion_snapshot.lock() = snapshot;
-        warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
 
         #[cfg(any(
             all(target_os = "windows", feature = "interception_driver"),
@@ -1119,6 +1113,7 @@ impl Kanata {
     }
 
     pub fn tick_ms(&mut self, ms_elapsed: u128, _tx: &Option<Sender<ServerMessage>>) -> Result<()> {
+        self.refresh_motion()?;
         let mut extra_ticks: u16 = 0;
         for _ in 0..ms_elapsed {
             self.tick_states(_tx)?;
@@ -1178,6 +1173,7 @@ impl Kanata {
         self.prev_keys.clear();
         self.prev_keys.append(&mut self.cur_keys);
         self.tick_held_vkeys();
+        self.refresh_motion()?;
         #[cfg(feature = "simulated_output")]
         {
             self.kbd_out.tick();
@@ -2580,6 +2576,9 @@ impl Kanata {
             let err = loop {
                 let can_block = {
                     let mut k = kanata.lock();
+                    if let Err(e) = k.refresh_motion() {
+                        break e;
+                    }
                     k.can_block_update_idle_waiting(ms_elapsed)
                 };
                 if can_block {
@@ -2588,7 +2587,13 @@ impl Kanata {
                         not(feature = "interception_driver"),
                         not(feature = "simulated_input"),
                     ))]
-                    kanata.lock().win_synchronize_keystates();
+                    {
+                        let mut k = kanata.lock();
+                        k.win_synchronize_keystates();
+                        if let Err(e) = k.refresh_motion() {
+                            break e;
+                        }
+                    }
 
                     log::trace!("blocking on channel");
                     match rx.recv() {

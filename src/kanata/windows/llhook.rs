@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, RecvError, SyncSender as Sender, TryRecvError, s
 use std::time;
 
 use super::PRESSED_KEYS;
-use crate::kanata::mouse_axis::{AXIS_COUNT, AxisState, MouseAxis};
+use crate::kanata::mouse_axis::{AXIS_COUNT, AxisState, MouseAxis, WheelMask};
 use crate::kanata::*;
 
 impl Kanata {
@@ -81,31 +81,17 @@ impl Kanata {
             true
         });
 
-        use OsCode::*;
-        let oscodes_for_mhook_active = &[
-            BTN_LEFT,
-            BTN_RIGHT,
-            BTN_MIDDLE,
-            BTN_SIDE,
-            BTN_EXTRA,
-            MouseWheelUp,
-            MouseWheelDown,
-            MouseWheelLeft,
-            MouseWheelRight,
-        ];
         let motion_snapshot = _cfg.lock().motion_snapshot.clone();
-        let maps_movement_at_startup = motion_snapshot.lock().map.maps_movement();
-        let _handle = if oscodes_for_mhook_active
-            .iter()
-            .any(|osc| MAPPED_KEYS.lock().contains(osc))
-            || motion_snapshot.lock().map.maps_wheel()
-            || maps_movement_at_startup
-        {
+        let plan = _cfg.lock().motion_capture.plan.clone();
+        let CapturePlan::Windows(caps) = plan else {
+            unreachable!("LLHOOK startup capture plan")
+        };
+        let _handle = if caps.mouse {
             log::info!("Installing mouse hook callback.");
-            if maps_movement_at_startup {
+            if caps.movement {
                 log::info!(
-                    "Mouse movement axis mapping is active: physical mouse moves are blocked \
-                     from the OS pipeline and re-injected with the mapped position. This adds \
+                    "The mouse hook supports physical axis mapping: transformed mouse moves are blocked \
+                     from the OS pipeline and re-injected with the mapped position. Transforming adds \
                      slight movement latency, and Raw Input consumers (e.g. some games) still \
                      observe the physical events."
                 );
@@ -186,6 +172,8 @@ impl Kanata {
             log::info!("No mouse inputs were in defsrc on startup. Not activating mouse hook.");
             None
         };
+
+        _cfg.lock().motion_capture.installed(plan.capabilities());
 
         #[cfg(all(target_os = "windows", feature = "gui"))]
         let _ui = ui; // prevents thread from panicking on exiting via a GUI

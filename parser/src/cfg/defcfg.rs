@@ -36,6 +36,9 @@ pub struct CfgLinuxOptions {
     pub linux_output_name: String,
     pub linux_output_bus_type: LinuxCfgOutputBusType,
     pub linux_device_detect_mode: Option<DeviceDetectMode>,
+    /// Retained after default derivation so reload can distinguish a requested
+    /// source universe from newly required automatic relative-device discovery.
+    pub linux_device_detect_mode_explicit: bool,
 }
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "unknown"))]
 impl Default for CfgLinuxOptions {
@@ -54,6 +57,7 @@ impl Default for CfgLinuxOptions {
             linux_output_name: "kanata".to_owned(),
             linux_output_bus_type: LinuxCfgOutputBusType::BusI8042,
             linux_device_detect_mode: None,
+            linux_device_detect_mode_explicit: false,
         }
     }
 }
@@ -488,6 +492,7 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                                 _ => unreachable!("validated earlier"),
                             });
                             cfg.linux_opts.linux_device_detect_mode = detect_mode;
+                            cfg.linux_opts.linux_device_detect_mode_explicit = true;
                         }
                     }
                     "windows-altgr" => {

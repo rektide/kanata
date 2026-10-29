@@ -81,6 +81,40 @@ mod linux {
     }
 
     #[test]
+    fn inactive_motion_programs_drive_discovery_without_overriding_policy() {
+        for (policy, expected) in [
+            ("", DeviceDetectMode::Any),
+            (
+                "linux-device-detect-mode keyboard-only",
+                DeviceDetectMode::KeyboardOnly,
+            ),
+            (
+                "linux-device-detect-mode keyboard-mice",
+                DeviceDetectMode::KeyboardMice,
+            ),
+            ("linux-dev /dev/input/selected", DeviceDetectMode::Any),
+        ] {
+            let cfg = parse_cfg(&format!("(defcfg {policy}) (defsrc) (deflayer base) (deflayer (later mouse-axis ((set (cell x y 2)))))")).unwrap();
+            assert_eq!(
+                cfg.options.linux_opts.linux_device_detect_mode,
+                Some(expected)
+            );
+            assert_eq!(
+                cfg.options.linux_opts.linux_device_detect_mode_explicit,
+                policy.contains("detect-mode")
+            );
+        }
+        let cfg = parse_cfg(
+            "(defsrc) (deflayer base) (deflayer (later mouse-axis ((set (cell x y null)))))",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.options.linux_opts.linux_device_detect_mode,
+            Some(DeviceDetectMode::KeyboardMice)
+        );
+    }
+
+    #[test]
     fn deflayermap_mouse_sets_detect_mode_any() {
         // Issue #2096: a mouse button listed ONLY in deflayermap (not defsrc) must still
         // cause Linux to grab mouse devices (DeviceDetectMode::Any), because parse_layers

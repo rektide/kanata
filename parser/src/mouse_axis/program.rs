@@ -331,6 +331,25 @@ pub struct MotionProgram {
     instructions: Vec<MotionInstruction>,
 }
 
+/// An on-demand, unquantized explanation of one coefficient. Products retain
+/// their sum's contributions rather than inventing a single winning edit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellExplanation {
+    pub instruction_index: usize,
+    pub operation: &'static str,
+    pub source: InstructionSource,
+    pub before: f64,
+    pub after: f64,
+    pub products: Vec<ProductContribution>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProductContribution {
+    pub via: MouseAxis,
+    pub left: f64,
+    pub right: f64,
+}
+
 impl MotionProgram {
     pub fn new(
         domain: AxisDomain,
@@ -363,6 +382,100 @@ impl MotionProgram {
         &self.instructions
     }
 
+    /// Conservative declaration analysis, independent of the startup stack.
+    /// Numeric edits (even zero/suppression) and products may affect future
+    /// inherited maps. Empty and null-only programs require nothing extra.
+    pub fn requires_capture(&self) -> bool {
+        self.instructions
+            .iter()
+            .any(|instruction| match &instruction.operation {
+                MotionOperation::Edit(_, operand) => {
+                    operand.cells().iter().any(|c| c.value.is_some())
+                }
+                MotionOperation::ComposeOutput(_) | MotionOperation::ComposeInput(_) => true,
+            })
+    }
+
+    /// Replays this immutable program in its actual inherited context. This is
+    /// deliberately off the native report path; at most AXIS_COUNT product terms
+    /// are returned per instruction. Callers supply layer/stack/generation context.
+    pub fn explain_cell(
+        &self,
+        inherited: &MouseAxisMap,
+        cell: Cell,
+    ) -> Result<Vec<CellExplanation>, EvaluationError> {
+        self.domain
+            .validate_cell(cell)
+            .map_err(|cause| EvaluationError {
+                instruction_index: None,
+                source: None,
+                operation: None,
+                cause,
+            })?;
+        let mut map = *inherited;
+        validate_map(&mut map, self.domain.mode).map_err(|cause| EvaluationError {
+            instruction_index: None,
+            source: None,
+            operation: None,
+            cause,
+        })?;
+        let coefficient = |map: &MouseAxisMap| match cell.input.branch {
+            InputBranch::Signed | InputBranch::Positive => {
+                map.rows[cell.output as usize][cell.input.axis as usize]
+            }
+            InputBranch::Negative => {
+                map.negative_rows[cell.output as usize][cell.input.axis as usize]
+            }
+        };
+        let mut trace = Vec::with_capacity(self.instructions.len());
+        for (index, instruction) in self.instructions.iter().enumerate() {
+            let old = map;
+            apply_instruction(&mut map, &instruction.operation).map_err(|cause| {
+                EvaluationError {
+                    instruction_index: Some(index),
+                    source: Some(Box::new(instruction.source.clone())),
+                    operation: Some(instruction.operation.name()),
+                    cause,
+                }
+            })?;
+            let rows = if cell.input.branch == InputBranch::Negative {
+                &old.negative_rows
+            } else {
+                &old.rows
+            };
+            let o = cell.output as usize;
+            let i = cell.input.axis as usize;
+            let products = match &instruction.operation {
+                MotionOperation::ComposeOutput(factor) => MouseAxis::ALL
+                    .into_iter()
+                    .map(|via| ProductContribution {
+                        via,
+                        left: factor.rows[o][via as usize],
+                        right: rows[via as usize][i],
+                    })
+                    .collect(),
+                MotionOperation::ComposeInput(factor) => MouseAxis::ALL
+                    .into_iter()
+                    .map(|via| ProductContribution {
+                        via,
+                        left: rows[o][via as usize],
+                        right: factor.rows[via as usize][i],
+                    })
+                    .collect(),
+                MotionOperation::Edit(_, _) => vec![],
+            };
+            trace.push(CellExplanation {
+                instruction_index: index,
+                operation: instruction.operation.name(),
+                source: instruction.source.clone(),
+                before: coefficient(&old),
+                after: coefficient(&map),
+                products,
+            });
+        }
+        Ok(trace)
+    }
+
     /// Deterministic finite-checked fold. Failure leaves the caller's map intact.
     /// Products read a complete old map, checking every product and partial sum
     /// in canonical axis order, without FMA, fusion, rounding or saturation.
@@ -385,6 +498,34 @@ impl MotionProgram {
             })?;
         }
         Ok(map)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureRequirements {
+    pub inputs: [bool; AXIS_COUNT],
+}
+
+impl CaptureRequirements {
+    pub fn for_programs<'a>(
+        baseline: &MouseAxisMap,
+        programs: impl IntoIterator<Item = &'a MotionProgram>,
+    ) -> Self {
+        let all = programs.into_iter().any(MotionProgram::requires_capture);
+        Self {
+            inputs: MouseAxis::ALL
+                .map(|axis| axis.supported() && (all || baseline.maps_input(axis))),
+        }
+    }
+
+    pub fn any(self) -> bool {
+        self.inputs.into_iter().any(|b| b)
+    }
+    pub fn movement(self) -> bool {
+        self.inputs[MouseAxis::X as usize] || self.inputs[MouseAxis::Y as usize]
+    }
+    pub fn wheel(self) -> bool {
+        self.inputs[MouseAxis::V as usize] || self.inputs[MouseAxis::H as usize]
     }
 }
 

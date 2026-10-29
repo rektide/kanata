@@ -20,16 +20,20 @@ impl Kanata {
     pub fn event_loop(kanata: Arc<Mutex<Self>>, tx: Sender<KeyEvent>) -> Result<()> {
         info!("entering the event loop");
 
-        let k = kanata.lock();
+        let mut k = kanata.lock();
         let allow_hardware_repeat = k.allow_hardware_repeat;
         let mouse_movement_key = k.mouse_movement_key.clone();
         let motion_snapshot = k.motion_snapshot.clone();
+        let plan = k.motion_capture.plan.clone();
+        let CapturePlan::Linux(ref linux_plan) = plan else {
+            unreachable!("Linux startup capture plan")
+        };
         let mut kbd_in = match KbdIn::new(
-            &k.kbd_in_paths,
-            k.continue_if_no_devices,
-            k.include_names.clone(),
-            k.exclude_names.clone(),
-            k.device_detect_mode,
+            &linux_plan.paths,
+            linux_plan.continue_if_no_devices,
+            linux_plan.include.clone(),
+            linux_plan.exclude.clone(),
+            linux_plan.mode,
         ) {
             Ok(kbd_in) => kbd_in,
             Err(e) => {
@@ -40,6 +44,7 @@ impl Kanata {
         // In some environments, this needs to be done after the input device grab otherwise it
         // does not work on kanata startup.
         Kanata::set_repeat_rate(k.x11_repeat_rate)?;
+        k.motion_capture.installed(plan.capabilities());
         drop(k);
         let mut axis_state = AxisState::default();
 
@@ -358,6 +363,7 @@ fn handle_scroll(
 
 #[cfg(test)]
 mod axis_tests {
+    use super::super::mouse_axis::MouseAxisMap;
     use super::*;
 
     fn rel(code: RelativeAxisCode, value: i32) -> InputEvent {

@@ -95,9 +95,6 @@ mod r#macro;
 use r#macro::*;
 mod mouse;
 use mouse::*;
-// Internal compiler first; layer headers must not accept programs until runtime
-// publication and capture installation are wired to them.
-#[allow(dead_code)]
 mod mouse_axis_program;
 mod multi;
 use multi::*;
@@ -360,6 +357,29 @@ pub struct LayerInfo {
     pub name: String,
     pub cfg_text: String,
     pub icon: Option<String>,
+    pub mouse_axis: crate::mouse_axis::program::MotionProgram,
+}
+
+/// Resolve from the immutable baseline in canonical low-to-high order. Dormant
+/// declarations are not guessed against an inappropriate inherited context.
+pub fn resolve_motion(
+    baseline: &crate::mouse_axis::MouseAxisMap,
+    layers: &[LayerInfo],
+    stack: &[u16],
+) -> std::result::Result<crate::mouse_axis::MouseAxisMap, String> {
+    let mut map = *baseline;
+    for &id in stack {
+        let layer = layers
+            .get(usize::from(id))
+            .ok_or_else(|| format!("invalid motion layer {id}"))?;
+        map = layer.mouse_axis.apply(&map).map_err(|error| {
+            format!(
+                "layer {id} ({:.96}), canonical stack {stack:?}: {error}",
+                layer.name
+            )
+        })?;
+    }
+    Ok(map)
 }
 
 #[allow(clippy::type_complexity)] // return type is not pub
@@ -732,8 +752,13 @@ pub fn parse_cfg_raw_string(
         bail!("No deflayer expressions exist. At least one layer must be defined.")
     }
 
-    let (layer_idxs, layer_icons) =
-        parse_layer_indexes(&layer_exprs, mapping_order.len(), &vars, &mut lsp_hints)?;
+    let (layer_idxs, mut layer_options) = parse_layer_indexes(
+        &layer_exprs,
+        mapping_order.len(),
+        &vars,
+        crate::mouse_axis::program::AxisDomain::native(cfg.mouse_axis_map.mode),
+        &mut lsp_hints,
+    )?;
     let mut sorted_idxs: Vec<(&String, &usize)> =
         layer_idxs.iter().map(|tuple| (tuple.0, tuple.1)).collect();
 
@@ -756,12 +781,21 @@ pub fn parse_cfg_raw_string(
     let layer_info: Vec<LayerInfo> = layer_names
         .into_iter()
         .zip(layer_strings)
-        .map(|(name, cfg_text)| LayerInfo {
-            name: name.clone(),
-            cfg_text,
-            icon: layer_icons.get(&name).unwrap_or(&None).clone(),
+        .map(|(name, cfg_text)| {
+            let options = layer_options.remove(&name).expect("indexed layer options");
+            LayerInfo {
+                name: name.clone(),
+                cfg_text,
+                icon: options.icon,
+                mouse_axis: options.mouse_axis,
+            }
         })
         .collect();
+
+    // A newly constructed layout starts with default layer zero; the on-load
+    // action is queued, not already processed. --check must validate this fold.
+    resolve_motion(&cfg.mouse_axis_map, &layer_info, &[0])
+        .map_err(|error| anyhow!("initial mouse-axis resolution: {error}"))?;
 
     let defsrc_layer = create_defsrc_layer();
 
@@ -907,7 +941,12 @@ pub fn parse_cfg_raw_string(
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "unknown"))]
     if cfg.linux_opts.linux_device_detect_mode.is_none() {
         cfg.linux_opts.linux_device_detect_mode = Some(
-            if !cfg.mouse_axis_map.is_identity() || mapped_keys.iter().any(|k| k.is_mouse_code()) {
+            if !cfg.mouse_axis_map.is_identity()
+                || layer_info
+                    .iter()
+                    .any(|layer| layer.mouse_axis.requires_capture())
+                || mapped_keys.iter().any(|k| k.is_mouse_code())
+            {
                 DeviceDetectMode::Any
             } else {
                 DeviceDetectMode::KeyboardMice

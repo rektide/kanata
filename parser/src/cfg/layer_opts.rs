@@ -1,49 +1,72 @@
 use crate::cfg::*;
+use crate::mouse_axis::program::{AxisDomain, MotionProgram};
 use crate::*;
 
 pub(crate) const DEFLAYER_ICON: [&str; 3] = ["icon", "🖻", "🖼"];
-pub(crate) type LayerIcons = HashMap<String, Option<String>>;
+pub(crate) type LayerOptionsByName = HashMap<String, LayerOptions>;
 
-pub fn parse_layer_opts(list: &[SExpr]) -> Result<HashMap<String, String>> {
-    let mut layer_opts: HashMap<String, String> = HashMap::default();
-    let opts = list.as_chunks::<2>();
-    for kv in opts.0.iter() {
-        let key_expr = &kv[0];
-        let val_expr = &kv[1];
-        // Read k-v pairs from the configuration
-        // todo: add hashmap for future options, currently only parse icons
-        let opt_key = key_expr.atom(None)
-            .ok_or_else(|| anyhow_expr!(key_expr, "No lists are allowed in {DEFLAYER} options"))
-            .and_then(|opt_key| {
-                if DEFLAYER_ICON.contains(&opt_key) {
-                    if layer_opts.contains_key(DEFLAYER_ICON[0]) {
-                        // separate dupe check since multi-keys are stored
-                        // with one "canonical" repr, so '🖻' → 'icon'
-                        // and this info will be lost after the loop
-                        bail_expr!(
-                            key_expr,
-                            "Duplicate option found in {DEFLAYER}: {opt_key}, one of {DEFLAYER_ICON:?} already exists"
-                        );
-                    }
-                    Ok(DEFLAYER_ICON[0])
-                } else {
-                    bail_expr!(key_expr, "Invalid option in {DEFLAYER}: {opt_key}, expected one of {DEFLAYER_ICON:?}")
-                }
-            })?;
-        if layer_opts.contains_key(opt_key) {
-            bail_expr!(key_expr, "Duplicate option found in {DEFLAYER}: {opt_key}");
+#[derive(Debug)]
+pub struct LayerOptions {
+    pub icon: Option<String>,
+    pub mouse_axis: MotionProgram,
+}
+
+impl LayerOptions {
+    pub fn empty(domain: AxisDomain) -> Self {
+        Self {
+            icon: None,
+            mouse_axis: MotionProgram::new(domain, vec![]).expect("empty program"),
         }
-        let opt_val = val_expr.atom(None).ok_or_else(|| {
-            anyhow_expr!(
-                val_expr,
-                "No lists are allowed in {DEFLAYER}'s option values"
-            )
+    }
+}
+
+pub fn parse_layer_opts(
+    list: &[SExpr],
+    vars: &HashMap<String, SExpr>,
+    domain: AxisDomain,
+) -> Result<LayerOptions> {
+    let mut options = LayerOptions::empty(domain);
+    let mut seen = HashSet::default();
+    let (pairs, remainder) = list.as_chunks::<2>();
+    for [key_expr, val_expr] in pairs {
+        let key = key_expr.atom(Some(vars)).ok_or_else(|| {
+            anyhow_expr!(key_expr, "No lists are allowed in {DEFLAYER} option names")
         })?;
-        layer_opts.insert(opt_key.to_owned(), opt_val.to_owned());
+        let key = if DEFLAYER_ICON.contains(&key) {
+            "icon"
+        } else {
+            key
+        };
+        if !seen.insert(key.to_owned()) {
+            bail_expr!(key_expr, "Duplicate option found in {DEFLAYER}: {key}");
+        }
+        match key {
+            "icon" => {
+                options.icon = Some(
+                    val_expr
+                        .atom(Some(vars))
+                        .ok_or_else(|| {
+                            anyhow_expr!(
+                                val_expr,
+                                "No lists are allowed in {DEFLAYER}'s icon value"
+                            )
+                        })?
+                        .trim_atom_quotes()
+                        .to_owned(),
+                );
+            }
+            "mouse-axis" => {
+                options.mouse_axis =
+                    mouse_axis_program::parse_motion_program(val_expr, vars, domain)?
+            }
+            _ => bail_expr!(
+                key_expr,
+                "Invalid option in {DEFLAYER}: {key}, expected icon, 🖻, 🖼 or mouse-axis"
+            ),
+        }
     }
-    let rem = opts.1;
-    if !rem.is_empty() {
-        bail_expr!(&rem[0], "This option is missing a value.");
+    if let Some(rem) = remainder.first() {
+        bail_expr!(rem, "This option is missing a value.");
     }
-    Ok(layer_opts)
+    Ok(options)
 }

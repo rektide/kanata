@@ -690,10 +690,78 @@ fn inherited_context_is_evaluated_only_when_the_program_is_applied() {
 }
 
 #[test]
-fn public_layer_options_do_not_accept_unconnected_motion_programs() {
-    let error =
-        parse_cfg("(defsrc a) (deflayer (base mouse-axis ((set (cell x x 2)))) a)").unwrap_err();
-    assert!(error.msg.contains("Invalid option"), "{error:?}");
+fn public_layer_headers_resolve_nested_variables_and_preserve_icons() {
+    let cfg = parse_cfg(
+        r#"
+      (defvar name base image "base.png" axis x value 2
+        operand (cell $axis y $value) instruction (add $operand)
+        program ($instruction) header ($name 🖼 $image mouse-axis $program))
+      (defsrc a)
+      (deflayer $header a)
+      (deflayermap (second icon second.ico mouse-axis ((mul-elements (scalar 3 (outputs x))))) a b)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(cfg.layer_info[0].name, "base");
+    assert_eq!(cfg.layer_info[0].icon.as_deref(), Some("base.png"));
+    assert_eq!(
+        resolve_motion(&cfg.options.mouse_axis_map, &cfg.layer_info, &[0, 1])
+            .unwrap()
+            .rows[0][1],
+        6.0
+    );
+    for header in [
+        "mouse-axis () mouse-axis null",
+        "icon a 🖼 b",
+        "mouse-axis",
+        "unknown ()",
+    ] {
+        assert!(parse_cfg(&format!("(defsrc) (deflayer (base {header}))")).is_err());
+    }
+}
+
+#[test]
+fn initial_arithmetic_is_checked_but_dormant_programs_keep_their_inherited_context() {
+    let error = parse_cfg("(defcfg mouse-axis-map ((x (x 1e308)))) (defsrc) (deflayer (base mouse-axis ((mul-elements (cell x x 2)))))").unwrap_err();
+    assert!(
+        error.msg.contains("initial mouse-axis resolution"),
+        "{error:?}"
+    );
+    assert!(error.msg.contains("instruction 1"), "{error:?}");
+    let cfg = parse_cfg("(defcfg mouse-axis-map ((x (x 1e308)))) (defsrc) (deflayer base) (deflayer (lower mouse-axis ((set (cell x x 1e-308))))) (deflayer (upper mouse-axis ((mul-elements (cell x x 1e308)))))").unwrap();
+    assert!(resolve_motion(&cfg.options.mouse_axis_map, &cfg.layer_info, &[0, 2]).is_err());
+    assert!(resolve_motion(&cfg.options.mouse_axis_map, &cfg.layer_info, &[0, 1, 2]).is_ok());
+}
+
+#[test]
+fn capture_analysis_uses_all_declarations_but_not_empty_or_null_edits() {
+    let cfg = parse_cfg("(defsrc) (deflayer (base mouse-axis null)) (deflayer (idle mouse-axis ((set (matrix (x null))) (add (scalar null)))))").unwrap();
+    assert!(
+        !CaptureRequirements::for_programs(
+            &cfg.options.mouse_axis_map,
+            cfg.layer_info.iter().map(|l| &l.mouse_axis)
+        )
+        .any()
+    );
+    for instruction in [
+        "(set (cell x x 0))",
+        "(add (cell x y 0))",
+        "(mul-elements (cell x y 2))",
+        "(compose-input (factor (from x) (to y) (values (1))))",
+    ] {
+        let cfg = parse_cfg(&format!(
+            "(defsrc) (deflayer base) (deflayer (inactive mouse-axis ({instruction})))"
+        ))
+        .unwrap();
+        let required = CaptureRequirements::for_programs(
+            &cfg.options.mouse_axis_map,
+            cfg.layer_info.iter().map(|l| &l.mouse_axis),
+        );
+        assert!(required.movement() && required.wheel());
+        for axis in MouseAxis::ALL {
+            assert_eq!(required.inputs[axis as usize], axis.supported());
+        }
+    }
 }
 
 #[cfg(feature = "lsp")]
@@ -712,4 +780,48 @@ fn lsp_variable_references_include_nested_program_boundaries() {
             );
         }
     });
+}
+
+#[test]
+fn on_demand_cell_explanation_replays_order_and_product_contributions() {
+    let program = parse_program(
+        "((add (cell x x 1)) (compose-output (factor (from x y) (to x) (values (1 1)))))",
+        domain(MouseAxisMapMode::Linear),
+    );
+    let trace = program
+        .explain_cell(
+            &map2(),
+            crate::mouse_axis::program::Cell {
+                output: X,
+                input: AxisInput {
+                    axis: X,
+                    branch: InputBranch::Signed,
+                },
+            },
+        )
+        .unwrap();
+    assert_eq!((trace[0].before, trace[0].after), (1.0, 2.0));
+    assert_eq!((trace[1].before, trace[1].after), (2.0, 5.0));
+    assert_eq!(trace[1].operation, "compose-output");
+    assert_eq!(trace[1].products.len(), AXIS_COUNT);
+    assert_eq!(
+        trace[1].products[0],
+        ProductContribution {
+            via: X,
+            left: 1.0,
+            right: 2.0
+        }
+    );
+    assert_eq!(
+        trace[1].products[1],
+        ProductContribution {
+            via: Y,
+            left: 1.0,
+            right: 3.0
+        }
+    );
+    assert_eq!(
+        trace[1].source.use_site.file_name.as_ref(),
+        "motion-test.kbd"
+    );
 }

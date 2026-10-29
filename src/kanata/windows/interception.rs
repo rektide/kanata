@@ -28,15 +28,12 @@ impl Kanata {
             kanata.lock().intercept_mouse_hwids_exclude.clone();
         let mouse_movement_key = kanata.lock().mouse_movement_key.clone();
         let motion_snapshot = kanata.lock().motion_snapshot.clone();
-        if mouse_to_intercept_hwids.is_some()
-            || mouse_to_intercept_excluded_hwids.is_some()
-            || !motion_snapshot.lock().map.is_identity()
-        {
-            // Movement remapping needs MOVE strokes as well, just like
-            // mouse-movement-key.
-            let intercept_move_strokes =
-                mouse_movement_key.lock().is_some() || motion_snapshot.lock().map.maps_movement();
-            if intercept_move_strokes {
+        let plan = kanata.lock().motion_capture.plan.clone();
+        let CapturePlan::Windows(caps) = plan else {
+            unreachable!("Interception startup capture plan")
+        };
+        if caps.mouse {
+            if caps.movement {
                 intrcptn.set_filter(ic::is_mouse, ic::Filter::MouseFilter(ic::MouseState::all()));
             } else {
                 intrcptn.set_filter(
@@ -45,6 +42,7 @@ impl Kanata {
                 );
             }
         }
+        kanata.lock().motion_capture.installed(plan.capabilities());
         let mut is_dev_interceptable: HashMap<ic::Device, bool> = HashMap::default();
         let mut axis_states: HashMap<ic::Device, AxisState> = HashMap::default();
         loop {
@@ -88,6 +86,9 @@ impl Kanata {
                             y,
                             ..
                         } => {
+                            let snapshot = motion_snapshot.lock().clone();
+                            let axis_state = axis_states.entry(dev).or_default();
+                            axis_state.observe_snapshot(&snapshot);
                             let allow_this_dev = is_device_interceptable(
                                 dev,
                                 &intrcptn,
@@ -106,9 +107,6 @@ impl Kanata {
                             {
                                 tx.try_send(KeyEvent::new(ms_mvmt_key, KeyValue::Tap))?;
                             }
-                            let snapshot = motion_snapshot.lock().clone();
-                            let axis_state = axis_states.entry(dev).or_default();
-                            axis_state.observe_snapshot(&snapshot);
                             if !snapshot.map.is_identity() {
                                 let output = map_mouse_stroke_axes(
                                     axis_state,
