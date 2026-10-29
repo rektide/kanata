@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Connects the cell/matrix/scalar design history and the human commission for Astra implementation notes followed by Sol xhigh implementation
+    title: Reviews Astra implementation readiness, approves missing-capture reload preflight rejection and commissions Sol xhigh's first implementation checkpoint
   - resource: /docs/config.adoc
     title: Implemented global linear and directional axis-map configuration
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
@@ -21,6 +21,8 @@ sources:
     title: Astra-high refinement of family-local blanket defaults, explicit cell operations and null exclusions
   - resource: /design/mouse-axis/layer-transform-design1.gpt6a.md
     title: Consolidated Astra-high proposal for ordered cell/matrix/scalar edits and explicit input/output matrix products
+  - resource: /design/mouse-axis/layer-transform-implementation0.gpt6a.md
+    title: Code-grounded Astra readiness review, integration interfaces and staged implementation handoff
 ---
 
 # Mouse and relative-input transform design
@@ -38,12 +40,18 @@ Starting examples:
 - [Output axes absent from the physical mouse](/cfg_samples/mouse-axis-generated.kbd).
 - [Independent directional branches](/cfg_samples/mouse-axis-directional.kbd).
 
-## Layer-controlled transforms — implementation preparation
+## Layer-controlled transforms — implementation underway
 
 - [Implementation commission](layer-transform-ask0.gpt6a.md#implementation-commission):
   the human requests Astra-high readiness and implementation notes, followed by
   Sol-xhigh implementation of the consolidated proposal when ready. Runtime
   support is still described by the configuration reference above.
+- [Astra implementation notes](layer-transform-implementation0.gpt6a.md): concrete
+  parser/runtime landing points, capture installation facts, reload staging and
+  meaningful checks. Parent review found no blocker to the first slice and
+  approved rejecting capture-incompatible reloads before live-state mutation.
+  Sol xhigh is implementing typed algebra, variable-aware program parsing and
+  focused tests as the first architectural checkpoint.
 
 - [Latest scope direction](layer-transform-ask0.gpt6a.md#cell-matrix-scalar):
   cell, matrix and scalar operands should coexist, with coefficient-wise

@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human develops the cell/matrix/scalar requirements and commissions Sol xhigh implementation after Astra readiness and implementation notes; parent preserves the scope and design history
+    title: Human commissions Sol xhigh after Astra notes; parent reviews readiness, approves capture-incompatible reload rejection and dispatches the typed algebra/parser checkpoint
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -27,6 +27,8 @@ sources:
     title: Focused response to the blanket-operation request, recommending cell replacement and explicit null exclusions
   - resource: /design/mouse-axis/layer-transform-design1.gpt6a.md
     title: Consolidated response proposing ordered edit operands, numeric composition factors and a single-map layer program
+  - resource: /design/mouse-axis/layer-transform-implementation0.gpt6a.md
+    title: Astra's concrete readiness assessment and implementation handoff
 ---
 
 # Layer-controlled input transforms and deferred animation desire
@@ -227,6 +229,22 @@ edits, distinct elementwise and true products, sparse nullable coefficient
 operands, numeric composition factors, full-stack layer resolution and explicit
 publication/capture/state behavior. Earlier gain-family and blanket-specificity
 recommendations remain historical alternatives. Animation remains deferred.
+
+### Readiness disposition and first checkpoint
+
+The [Astra implementation notes](layer-transform-implementation0.gpt6a.md)
+identify no algebra or syntax blocker to the first implementation slice.
+Parent review approves the recommended reload policy: a candidate requiring
+capture unavailable under the running backend's installed capability or frozen
+pending-startup plan must fail preflight, retain the running state and explain
+the restart requirement. This concerns motion-preflight failure atomicity;
+arbitrary rollback of unrelated existing reload side effects is not promised.
+
+Sol xhigh is commissioned for the first coherent checkpoint: typed ordered
+algebra, variable-aware program parsing and focused checks, followed by parent
+interface review before native/runtime integration. The complete requested
+feature still includes publication, capture and state behavior; the parser
+checkpoint alone is not feature completion.
 
 ## Questions for the layer proposal
 
