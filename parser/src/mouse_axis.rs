@@ -8,6 +8,8 @@
 
 use crate::keys::OsCode;
 
+pub mod program;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum MouseAxis {
@@ -132,6 +134,25 @@ impl Default for MouseAxisMap {
 }
 
 impl MouseAxisMap {
+    /// Compare only coefficients used by the selected mode. Linear maps do not
+    /// use `negative_rows`; provenance and unused storage are not motion changes.
+    pub fn semantic_eq(&self, other: &Self) -> bool {
+        self.mode == other.mode
+            && MouseAxis::ALL
+                .into_iter()
+                .all(|output| self.output_eq(other, output))
+    }
+
+    /// A mode change is a discontinuity for every output, even if its numbers
+    /// happen to agree. Signed zero compares equal; program evaluation rejects NaN.
+    pub fn output_eq(&self, other: &Self, output: MouseAxis) -> bool {
+        let output = output as usize;
+        self.mode == other.mode
+            && self.rows[output] == other.rows[output]
+            && (self.mode == MouseAxisMapMode::Linear
+                || self.negative_rows[output] == other.negative_rows[output])
+    }
+
     pub fn is_identity(&self) -> bool {
         let identity = Self::default();
         self.rows == identity.rows
