@@ -240,6 +240,47 @@ fn products_read_old_rows_and_columns_not_partially_written_results() {
 }
 
 #[test]
+fn products_match_unquantized_stages_followed_by_one_quantization() {
+    let domain = domain(MouseAxisMapMode::Linear);
+    let base = map2([[0.5, 0.25], [-0.5, 0.75]]);
+    let q = factor(domain, [[0.5, 1.0], [-0.25, 0.5]]);
+    let p = factor(domain, [[1.0, 0.5], [-0.5, 0.25]]);
+    let output = program(domain, vec![MotionOperation::ComposeOutput(q)])
+        .apply(&base)
+        .unwrap();
+    let input = program(domain, vec![MotionOperation::ComposeInput(p)])
+        .apply(&base)
+        .unwrap();
+    let inherited_motion = |[x, y]: [f64; 2]| [0.5 * x + 0.25 * y, -0.5 * x + 0.75 * y];
+    let output_stage = |[x, y]: [f64; 2]| [0.5 * x + y, -0.25 * x + 0.5 * y];
+    let input_stage = |[x, y]: [f64; 2]| [x + 0.5 * y, -0.5 * x + 0.25 * y];
+    for motion in [[3, 0], [7, -2], [-5, 3]] {
+        for (map, expected) in [
+            (
+                output,
+                output_stage(inherited_motion(motion.map(f64::from))),
+            ),
+            (input, inherited_motion(input_stage(motion.map(f64::from)))),
+        ] {
+            let mut transform = MouseAxisTransform {
+                map,
+                ..Default::default()
+            };
+            let mut vector = [0; AXIS_COUNT];
+            vector[..2].copy_from_slice(&motion);
+            assert_eq!(
+                &transform.apply(vector)[..2],
+                &expected.map(|value| value.trunc() as i32)
+            );
+        }
+    }
+    // Rounding the first stage would lose motion: C(3,0) = (1.5,-1.5),
+    // then Q gives (-0.75,-1.125), whose Y output is -1 rather than zero.
+    let early = output_stage(inherited_motion([3.0, 0.0]).map(f64::trunc));
+    assert_eq!(early.map(|value| value.trunc() as i32), [0, 0]);
+}
+
+#[test]
 fn named_rectangular_factor_preserves_unlisted_rows_and_clears_listed_rows() {
     let domain = domain(MouseAxisMapMode::Linear);
     let mut base = MouseAxisMap::default();
@@ -378,6 +419,58 @@ fn nonfinite_edits_products_and_partial_sums_fail_without_mutating_base() {
         }
     ));
     assert_eq!(base.rows[0][0], f64::MAX);
+
+    let mut base = MouseAxisMap::default();
+    for input in [X, Y, Z] {
+        base.rows[X as usize][input as usize] = f64::MAX;
+    }
+    let f = NumericFactor::from_block(
+        domain,
+        vec![X],
+        vec![X, Y, Z],
+        vec![vec![1.0], vec![1.0], vec![-1.0]],
+    )
+    .unwrap();
+    let error = program(domain, vec![MotionOperation::ComposeInput(f)])
+        .apply(&base)
+        .unwrap_err();
+    assert!(matches!(
+        error.cause,
+        ProgramError::NonFinite {
+            stage: "product partial sum",
+            via: Some(Y),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn directional_negative_product_is_finite_checked_independently() {
+    let domain = domain(MouseAxisMapMode::Directional);
+    let mut base = MouseAxisMap {
+        mode: MouseAxisMapMode::Directional,
+        ..Default::default()
+    };
+    base.negative_rows[0][0] = f64::MAX;
+    let f = factor(domain, [[2.0, 0.0], [0.0, 1.0]]);
+    let error = program(domain, vec![MotionOperation::ComposeOutput(f)])
+        .apply(&base)
+        .unwrap_err();
+    assert!(matches!(
+        error.cause,
+        ProgramError::NonFinite {
+            cell: Cell {
+                input: AxisInput {
+                    branch: InputBranch::Negative,
+                    ..
+                },
+                ..
+            },
+            stage: "product",
+            ..
+        }
+    ));
+    assert_eq!(base.negative_rows[0][0], f64::MAX);
 }
 
 #[test]

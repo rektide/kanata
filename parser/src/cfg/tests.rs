@@ -12,6 +12,7 @@ mod defhands;
 mod device_detect;
 mod environment;
 mod macros;
+mod mouse_axis_program;
 
 static CFG_PARSE_LOCK: Mutex<()> = Mutex::new(());
 

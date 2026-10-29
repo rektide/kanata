@@ -95,6 +95,10 @@ mod r#macro;
 use r#macro::*;
 mod mouse;
 use mouse::*;
+// Internal compiler first; layer headers must not accept programs until runtime
+// publication and capture installation are wired to them.
+#[allow(dead_code)]
+mod mouse_axis_program;
 mod multi;
 use multi::*;
 mod oneshot;
