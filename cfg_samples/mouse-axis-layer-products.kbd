@@ -1,0 +1,23 @@
+;; True matrix products are not elementwise multiplication.
+;; Hold F1 or F2 separately: physical (2,3) gives (6,-2) or (3,-4).
+;; F3 post-composes a shear; F4 routes outputs X/Y into wheel V.
+(defcfg delegate-to-first-layer yes
+  mouse-axis-map ((x (y 1)) (y (x -1))))
+(defvar scale-x (factor (from x y) (to x y) (values (2 0) (0 1))))
+(defsrc f1 f2 f3 f4)
+(deflayer base
+  (layer-while-held post-scale)
+  (layer-while-held pre-scale)
+  (layer-while-held shear)
+  (layer-while-held rectangular)
+)
+(deflayer (post-scale mouse-axis ((compose-output $scale-x))) _ _ _ _)
+(deflayer (pre-scale mouse-axis ((compose-input $scale-x))) _ _ _ _)
+(deflayer (shear mouse-axis (
+  (compose-output (factor (from x y) (to x y) (values (1 1) (0 1))))
+)) _ _ _ _)
+;; One supplied row, two columns; V's factor row is cleared before filling.
+;; Units here are high-resolution wheel units per pointer count (120/notch).
+(deflayer (rectangular mouse-axis (
+  (compose-output (factor (from x y) (to v) (values (2 3))))
+)) _ _ _ _)

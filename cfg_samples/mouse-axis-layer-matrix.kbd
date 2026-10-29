@@ -1,0 +1,26 @@
+;; One nonuniform operand, three different operations. Hold one key at a time
+;; to see the independent examples; simultaneous holds execute low-to-high.
+;; Baseline X/Y block: [[1,2],[3,4]]. Other channels pass through.
+(defcfg delegate-to-first-layer yes
+  mouse-axis-map ((x (x 1) (y 2)) (y (x 3) (y 4))))
+(defvar patch (matrix (x (x 2) (y null)) (y (x -1) (y 0.5))))
+(defsrc f1 f2 f3 f4)
+(deflayer base
+  (layer-while-held replace)
+  (layer-while-held offset)
+  (layer-while-held multiply)
+  (layer-while-held ordered)
+)
+;; [[2,2],[-1,0.5]]: null skips only this edit; omission would do the same.
+(deflayer (replace mouse-axis ((set $patch))) _ _ _ _)
+;; [[3,2],[2,4.5]]
+(deflayer (offset mouse-axis ((add $patch))) _ _ _ _)
+;; [[2,2],[-3,2]]
+(deflayer (multiply mouse-axis ((mul-elements $patch))) _ _ _ _)
+;; [[2,3],[6,8]]: X<-Y excluded from multiplication, then incremented.
+;; The final null does not restore anything. Numeric zero would be a real edit.
+(deflayer (ordered mouse-axis (
+  (mul-elements (scalar 2 (outputs x y) (inputs x y) (except (x y))))
+  (add (cell x y 1))
+  (set (cell y y null))
+)) _ _ _ _)

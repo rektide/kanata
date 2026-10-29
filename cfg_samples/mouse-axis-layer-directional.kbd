@@ -1,0 +1,16 @@
+;; Directional post-composition operates on both magnitude-branch tables.
+;; F1 shear: (-2,3) -> (1,3). F1 then F2 branch patch: (-2,3) -> (4,3).
+;; Holding order matters: a later shear reads any earlier patch.
+;; compose-input is intentionally unsupported in directional mode.
+(defcfg delegate-to-first-layer yes mouse-axis-map-mode directional)
+(defsrc f1 f2)
+(deflayer base (layer-while-held shear) (layer-while-held patch))
+(deflayer (shear mouse-axis (
+  (compose-output (factor (from x y) (to x) (values (1 1))))
+)) _ _)
+(deflayermap (patch mouse-axis (
+  (set (cell x x- 0.5))
+))
+  f1 _
+  f2 _
+)

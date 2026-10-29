@@ -246,6 +246,10 @@ A <<windows-only-tray-icon,Windows tray menu build>> also allows specifying
 layer icons in `+deflayer+` and `+deflayermap+` to show in the tray menu on layer activation,
 see https://github.com/jtroo/kanata/blob/main/cfg_samples/tray-icon/tray-icon.kbd[example config]
 
+Both layer forms also accept a <<mouse-axis-layers,`mouse-axis` header program>>
+for physical relative motion on Linux and Windows. It can coexist with an icon:
+`(deflayer (precision icon precision.ico mouse-axis (...)) ...)`.
+
 ==== deflayermap
 
 **Reference**
@@ -5171,7 +5175,8 @@ also scrolling.
   suppresses that output.
 - Gains are finite numbers: `1` preserves magnitude, `-1` inverts, `0.5` halves,
   and `0` contributes nothing. Fractions accumulate rather than being lost on
-  every event. Changing the matrix resets accumulated fractions.
+  every event. Discrete layer changes reset only changed outputs' fractions;
+  a successful configuration reload resets all fractions, even for an equal map.
 - Every source refers to physical input; rows apply simultaneously, not as a
   chain of transformations.
 - Output rows and input terms within a row must be unique. The selected input
@@ -5334,7 +5339,7 @@ that the input device has already combined into one report delta.
 - Linux transforms complete input reports and deduplicates legacy/high-resolution
   wheel data separately for each wheel. A non-identity mapping enables `any`
   device detection by default; explicit detection settings and include/exclude
-  filters still take precedence. Mapping changes are live-reloadable.
+  filters still take precedence. See the capture/reload contract below.
 - Windows Interception supports X/Y/V/H with native relative deltas. It preserves
   the other components of combined button/movement/wheel strokes. Adding mouse
   interception or movement interception after startup requires a restart.
@@ -5345,7 +5350,237 @@ that the input device has already combined into one report delta.
   for raw movement mapping. If the mouse hook was absent at startup, restart
   to enable it.
 - macOS axis mapping remains unimplemented; configuring a non-identity mapping
-  logs a warning.
+  or a numeric layer program logs a warning.
+
+[[mouse-axis-layers]]
+==== Layer-controlled physical motion
+
+Add `mouse-axis` to a parenthesized `deflayer` or `deflayermap` header.
+Its value is an *ordered list of instructions* modifying the inherited map.
+Missing `mouse-axis`, `mouse-axis null`, and `mouse-axis ()` are empty programs,
+not identity resets. Static `defvar` values work throughout programs, operands,
+selectors, factors, axes and numbers.
+
+.Precision and boost preserving a global quarter-turn
+[source]
+----
+(defcfg
+  delegate-to-first-layer yes
+  mouse-axis-map ((x (y 1)) (y (x -1)))
+)
+(defsrc f1 f2 f3 f4)
+(defvirtualkeys precision-control (layer-while-held precision))
+(deflayer base
+  (layer-while-held precision)
+  (layer-while-held boost)
+  (layer-while-held wheel-fast)
+  (on-press toggle-virtualkey precision-control)
+)
+(deflayer (precision mouse-axis (
+  (mul-elements (scalar 0.25 (outputs x y)))
+)) _ _ _ _)
+(deflayer (boost mouse-axis (
+  (mul-elements (scalar 2 (outputs x y)))
+)) _ _ _ _)
+(deflayer (wheel-fast mouse-axis (
+  (mul-elements (scalar 2 (outputs v h)))
+)) _ _ _ _)
+----
+
+Physical X=8, Y=4 yields X=4, Y=-8 normally; precision gives X=1, Y=-2;
+boost gives X=8, Y=-16; both give X=2, Y=-4. Scaling whole output rows,
+rather than diagonal cells, preserves the rotation. Wheel speed is independent.
+F4 toggles an ordinary virtual holder; it is not an animated transition.
+
+===== Coefficient edits: cell, matrix and scalar
+
+The operators `set`, `add`, and `mul-elements` take one nullable operand:
+
+[source]
+----
+(set          (cell x y 7))
+(add          (matrix (x (x 2) (y null)) (y (x -1) (y 0.5))))
+(mul-elements (scalar 0.25 (outputs x y)))
+(mul-elements (scalar 2 (outputs x y) (inputs x y) (except (x y))))
+----
+
+- `(cell OUTPUT INPUT VALUE)` selects one coefficient.
+- `(matrix (OUTPUT (INPUT VALUE) ...) ...)` supplies named sparse rows.
+  Unlike the *global* map syntax, a named row does not clear unspecified cells.
+  Missing cells, `(x)`, and `(x null)` supply no edits.
+- `(scalar VALUE ...)` broadcasts over the Cartesian product of its selected
+  outputs and inputs. An omitted selector means all supported axes on that side,
+  including wheels and Linux's extra channels. `except` removes listed cell pairs
+  from that instruction. Explicit selectors must be nonempty and contain no
+  duplicates; exclusions must belong to the selected block.
+
+Each instruction reads the preceding result. A number replaces, adds to, or
+elementwise-multiplies the selected coefficient. `null` *skips this instruction's
+edit*: it is not zero, identity, or restoration of a value from before earlier
+instructions. A later null cannot undo an earlier broadcast. Zero is real data:
+set/multiply by zero removes a route; adding zero leaves its number unchanged.
+Duplicate cells within one operand are errors; repeated edits in separate
+instructions are valid and execute in order.
+
+For inherited X/Y rows `[[1,2],[3,4]]`, the nonuniform matrix above gives:
+`set` -> `[[2,2],[-1,0.5]]`, `add` -> `[[3,2],[2,4.5]]`, and
+`mul-elements` -> `[[2,2],[-3,2]]`. The null X<-Y cell remains 2.
+Omitting that cell has the same effect.
+
+*Scalar broadcast is not scalar times identity.* On that same block, scalar 2
+with `set` fills every cell with 2; `add` gives `[[3,4],[5,6]]`;
+`mul-elements` gives `[[2,4],[6,8]]`. For sensitivity, normally use
+`mul-elements` on selected outputs. To replace the entire map with a sparse,
+zero-filled mapping, explicitly use `(set (scalar 0))` then a sparse set matrix.
+
+For example, multiplying X/Y by 2 then adding 1 to X<-Y gives 5, not 6,
+when that coefficient started at 2. Reverse the instructions and it becomes 6.
+There is no specificity override or hidden second gain family.
+
+===== True input and output products
+
+Use distinct `compose-output` and `compose-input` instructions for matrix
+products, not `mul-elements`. For motion `y = C u`:
+
+- `compose-output` produces `Q C`, applying Q after the inherited mapping.
+- `compose-input` produces `C P`, applying P to physical input before C.
+
+[source]
+----
+(compose-output (factor
+  (from x y) (to x y)
+  (values (2 0) (0 1))
+))
+----
+
+`values` has one row per `to` axis and one column per `from` axis, in the
+*written* order. Lists must be unique, nonempty and dimensionally match values.
+A factor starts as identity on the complete supported basis; each listed `to`
+row is cleared completely, then its listed `from` columns are filled. Unlisted
+rows stay identity; unlisted columns in a listed row are zero. A rectangular
+supplied block is valid, for example `(from x y) (to v) (values (2 3))`.
+This does not create new channels or require equal numbers of input/output routes.
+
+Factors require finite numbers everywhere in their supplied block: *null is
+rejected*. An identity entry in a factor does not promise the corresponding
+result cell stays unchanged; another term in the product can contribute.
+For `C=[[1,2],[3,4]]` and `Q=[[1,1],[0,1]]`, `Q C=[[4,6],[3,4]]`.
+
+With the global quarter-turn `C=[[0,1],[-1,0]]`, the example factor gives
+`Q C=[[0,2],[-1,0]]`; physical `(2,3)` yields `(6,-2)`. Changing the operator
+to `compose-input` gives `C P=[[0,1],[-2,0]]` and `(3,-4)` instead.
+Elementwise multiplication by the displayed diagonal block would erase those
+off-diagonal routes. Products read a complete old map, never partial new rows.
+Successive input factors P1 then P2 produce `C P1 P2`: physical input encounters
+P2 first. Instructions edit coefficients in text order, not runtime event stages.
+
+All operations retain native units. Coefficient set/add values are output units
+per input unit; elementwise multipliers are dimensionless. Factor values are
+`to` units per `from` unit. Mixing pointer and wheel channels performs no implicit
+conversion (one wheel notch is still 120 units). Coefficient addition does not
+generate constant motion: zero physical input still contributes zero output.
+
+===== Directional mode
+
+The configuration-wide `mouse-axis-map-mode directional` also governs layer
+operands. Outputs remain unsuffixed; inputs require branches such as `x+`,
+`x-`, `v+`. Omitted scalar input selectors include *both* branches; an explicit
+selector lists the desired branches. Negative input supplies positive magnitude,
+so `(set (cell x x- 0.5))` makes leftward input contribute *positive* X at half gain.
+
+`compose-output` supports directional maps by multiplying both branch tables
+with the same numeric output factor. Factor axes stay unsuffixed. For example,
+post-composing directional identity with `(from x y) (to x) (values (1 1))`
+gives X=x+y. A subsequent set of X<-X- to 0.5 makes input `(-2,3)` yield `(4,3)`.
+`compose-input` is rejected in directional mode, even on inactive layers:
+general physical pre-mixing before sign selection cannot be represented by this
+single-map format. Arbitrary directional stage pipelines are not provided.
+
+===== Layer order, publication and fractional state
+
+Motion uses all held layers, newest first, followed by the selected default;
+keep each layer's highest-priority occurrence, then reverse to resolve from
+lowest priority to highest. Starting from the immutable global map, run every
+surviving layer's instructions once. Multiple physical/virtual holders do not
+multiply a layer's program. Releasing its newest holder can move it back below
+another layer. A held default runs once at its held position; otherwise the
+default is lowest. No implicit first-layer fallback is added.
+
+This order is independent of keyboard `transparent-key-resolution` and
+`delegate-to-first-layer`. A lower layer or default can change motion while the
+visible top layer stays the same. Missing programs inherit. Releases rebuild
+from baseline; they never invert an edit or repeatedly scale yesterday's map.
+Virtual and one-shot holds participate while actually present in layout state.
+The on-load action is queued, not predicted during initial resolution.
+
+The runtime refreshes at tick entry (including zero elapsed time) and after
+each inner processing tick. Each native report takes one immutable snapshot of
+coefficients and mapped wheel directions. It uses the *latest fully processed
+layout state*, not strict physical arrival order between keyboard and motion
+threads. Queued virtual actions affect later snapshots only after processing.
+Changing a map emits no motion; already queued output is not retransformed.
+Generated `movemouse-*`/`mwheel-*` actions remain separate and are not transformed.
+
+Quantization occurs once per output after report contributions are summed.
+A discrete change resets fractions only for outputs whose final row changed
+(both branch rows in directional mode). A changed V/H row also clears that wheel's
+raw and mapped-key notch remainders. Pointer-only precision preserves unchanged
+wheel credit. Reset epochs remember processed A->B->A changes even if no input
+report arrived in between. Numerically equal final rows do not reset merely
+because provenance changed. Every successful reload resets *all* motion state,
+including equal maps; old fractional credit is not restored on release.
+
+===== Capture, checking and reload
+
+Startup capture accounts for *inactive declarations*. The current conservative
+policy requests all supported relative inputs when any layer contains a numeric
+edit or product, even for a wheel-only or identity-looking instruction. Empty
+and null-only programs add no capture beyond the global map. Thus a dormant
+precision layer can enable movement capture before it is first used.
+
+Linux derives `any` discovery when needed, unless an explicit detect mode was
+given. Explicit `linux-dev` paths bypass autodetection; name include/exclude
+filters remain authoritative. These policies restrict the source universe and
+do not prove that every requested physical axis exists. The reader retains its
+startup paths/discovery/filter policy; reload does not rebuild or widen it.
+`keyboard-mice` includes keyboards and combined keyboard/mouse devices, not all
+standalone mice.
+
+Windows Interception installs a mouse filter with MOVE only when planned;
+wheel/button capture alone is not movement capture. An existing LLHOOK mouse
+hook, even one installed only for buttons, already receives movement and can
+support later axis mapping. Capture requirements, the frozen startup plan, and
+successful native installation are tracked separately. An early reload does not
+change what the pending startup backend will install.
+
+`kanata --check --cfg FILE` validates syntax and finite arithmetic for the actual
+initial/default fold without opening input devices. Later active combinations
+are checked at runtime, including each product and partial sum. Invalid active
+combinations propagate an error with layer, instruction/source, stack and
+generation context; no partial map or nonfinite replacement is published.
+Dormant programs are not rejected by testing them against an invented baseline
+context that lower layers might legitimately change.
+
+Reload preflights the candidate's initial stack, wheel mask and capture needs
+*before* changing output settings or live layout/motion state. A candidate needing
+capture unavailable in the installed backend (or frozen pending plan) is rejected
+with a restart-required error, leaving the running configuration intact.
+Linux newly required automatic `any` discovery is similarly rejected if the
+existing automatic reader cannot supply it; retaining explicit source policy is
+also possible, with its existing device limits. No automatic reader/hook rebuild
+or cleanup is attempted. This is motion-preflight atomicity, not rollback of all
+unrelated gamepad or OS reload side effects. A later unrelated failure is still
+reported as a failed reload, with layout/program/snapshot from one generation.
+
+Debug logs show bounded stack/instruction/source and coefficient-change summaries.
+Animation, device-qualified inputs, multiple output endpoints, raw-HID capture,
+stateful output channels and arbitrary directional pipelines remain outside this
+feature. Complete examples:
+
+- `cfg_samples/mouse-axis-layers.kbd`: precision, boost, wheel speed, virtual holder.
+- `cfg_samples/mouse-axis-layer-matrix.kbd`: nonuniform nullable edits and ordering.
+- `cfg_samples/mouse-axis-layer-products.kbd`: true left/right products and a rectangular block.
+- `cfg_samples/mouse-axis-layer-directional.kbd`: directional post-composition and branch patching.
 
 ==== Per-output shorthand: mouse-x-map, mouse-y-map, mouse-wheel-v-map, mouse-wheel-h-map
 
@@ -5370,8 +5605,8 @@ duplicating another channel.
 
 For prospective Linux device-qualified routing and multiple virtual outputs,
 see link:../design/mouse-axis/linux-flexibility0.gpt6a.md[the Linux flexibility design].
-The link:../design/mouse-axis/README.md[transform design reading map] also records
-the current layer-inheritance question and deferred animation desire.
+The link:../design/mouse-axis/README.md[transform design reading map] records
+the layer-transform design history, implementation receipts and deferred animation desire.
 
 [[linux-only-linux-dev]]
 === Linux only: linux-dev

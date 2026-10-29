@@ -825,3 +825,15 @@ fn on_demand_cell_explanation_replays_order_and_product_contributions() {
         "motion-test.kbd"
     );
 }
+
+#[test]
+fn published_layer_motion_samples_parse() {
+    for source in [
+        include_str!("../../../../cfg_samples/mouse-axis-layers.kbd"),
+        include_str!("../../../../cfg_samples/mouse-axis-layer-matrix.kbd"),
+        include_str!("../../../../cfg_samples/mouse-axis-layer-products.kbd"),
+        include_str!("../../../../cfg_samples/mouse-axis-layer-directional.kbd"),
+    ] {
+        parse_cfg(source).unwrap();
+    }
+}

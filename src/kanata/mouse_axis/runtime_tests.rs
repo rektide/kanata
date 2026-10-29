@@ -263,3 +263,30 @@ fn pending_startup_installs_the_original_plan_despite_an_early_identity_reload()
     .unwrap();
     k.install_config(candidate, &None).unwrap();
 }
+
+#[test]
+fn precision_sample_is_a_complete_layout_to_physical_vector_path() {
+    let _lock = crate::tests::CFG_PARSE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut k = new(include_str!("../../../cfg_samples/mouse-axis-layers.kbd"));
+    let mut device = AxisState::default();
+    let mut input = [0; AXIS_COUNT];
+    input[..4].copy_from_slice(&[8, 4, 120, 0]);
+    let physical = |k: &Kanata, device: &mut AxisState| {
+        device.observe_snapshot(&snapshot(k));
+        let output = device.apply(input);
+        <[i32; 4]>::try_from(&output[..4]).unwrap()
+    };
+    assert_eq!(physical(&k, &mut device), [4, -8, 120, 0]);
+    key(&mut k, OsCode::KEY_F1, KeyValue::Press);
+    assert_eq!(physical(&k, &mut device), [1, -2, 120, 0]);
+    key(&mut k, OsCode::KEY_F2, KeyValue::Press);
+    key(&mut k, OsCode::KEY_F3, KeyValue::Press);
+    assert_eq!(physical(&k, &mut device), [2, -4, 240, 0]);
+    key(&mut k, OsCode::KEY_F1, KeyValue::Release);
+    assert_eq!(physical(&k, &mut device), [8, -16, 240, 0]);
+    key(&mut k, OsCode::KEY_F2, KeyValue::Release);
+    key(&mut k, OsCode::KEY_F3, KeyValue::Release);
+    assert_eq!(physical(&k, &mut device), [4, -8, 120, 0]);
+}

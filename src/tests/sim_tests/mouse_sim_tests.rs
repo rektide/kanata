@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn physical_layer_transform_never_retransforms_generated_mouse_or_wheel_output() {
+    let baseline = "(defsrc a b) (deflayermap (base) a (movemouse-right 1 7) b (mwheel-up 1 1))";
+    let transformed = "(defcfg mouse-axis-map ((x (y 1)) (y (x -1)))) (defsrc a b) (deflayermap (base mouse-axis ((set (scalar 0)))) a (movemouse-right 1 7) b (mwheel-up 1 1))";
+    let inputs = "d:a d:b t:5 u:a u:b t:2";
+    let output = simulate(baseline, inputs).to_ascii();
+    assert!(
+        output.contains("move Right,7") && output.contains("scroll:Up"),
+        "{output}"
+    );
+    assert_eq!(simulate(transformed, inputs).to_ascii(), output);
+}
+
+#[test]
 fn multi_mouse_button_does_multi_click_release_single_hold() {
     let result = simulate(
         "(defsrc) (deflayermap (base) a (multi mmid mmid mrgt mlft))",

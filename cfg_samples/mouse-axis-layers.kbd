@@ -1,0 +1,23 @@
+;; Linux/Windows physical motion only. --check never captures devices.
+;; F1: precision; F2: boost; F3: faster wheels; F4: toggle virtual precision.
+;; Physical and virtual holders of precision apply its program once.
+(defcfg
+  delegate-to-first-layer yes
+  mouse-axis-map ((x (y 1)) (y (x -1)))
+)
+(defvar precision-program ((mul-elements (scalar 0.25 (outputs x y)))))
+(defsrc f1 f2 f3 f4)
+(defvirtualkeys precision-control (layer-while-held precision))
+(deflayer base
+  (layer-while-held precision)
+  (layer-while-held boost)
+  (layer-while-held wheel-fast)
+  (on-press toggle-virtualkey precision-control)
+)
+(deflayer (precision mouse-axis $precision-program) _ _ _ _)
+(deflayer (boost mouse-axis (
+  (mul-elements (scalar 2 (outputs x y)))
+)) _ _ _ _)
+(deflayer (wheel-fast mouse-axis (
+  (mul-elements (scalar 2 (outputs v h)))
+)) _ _ _ _)
