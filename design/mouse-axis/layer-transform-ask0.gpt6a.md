@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human commissions sparse per-element layer operations and defers animation; parent records the clarification and connects the completed Astra-high proposal
+    title: Human commissions sparse per-cell and blanket layer operations and defers animation; parent records scope clarifications and connects the Astra-high proposal
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -91,6 +91,40 @@ must support this granularity even if it also offers convenient row/group edits.
 Addition here concerns a **parameter** (gain or coefficient), not automatic
 constant pointer movement when input is zero. The design should state this
 distinction and consider how user-facing terminology keeps it understandable.
+
+<a id="cell-and-blanket-scope"></a>
+
+### Individual cells and blanket operations
+
+The human subsequently asked whether the proposal was only a blanket apply,
+clarifying: **individual cells are required, and blanket application is desired
+too**. Both scopes belong in the design.
+
+The first proposal already covers individual coefficient edits. Its prospective
+`coefficients ((x (y (mul 0.5))))` changes only the Y-input to X-output cell;
+other entries in that row inherit unchanged. Its independent `output-gain`
+parameter can scale an entire output row without enumerating that row's cells.
+
+An explicit whole-matrix blanket operation was not specified in the first
+proposal. The next design refinement should make bulk scope usable alongside
+sparse cell operations, without requiring repetition of the same operator in
+every cell. Keep parameter scope explicit: blanket coefficient edits and
+blanket output-gain edits are different operations and should not accidentally
+apply the same scaling twice.
+
+Resolve these interactions explicitly:
+
+- Which entries a blanket operation covers, including directional branch cells.
+- Whether a specific cell operation replaces the blanket operation for that
+  cell, or is applied after it; define what value add/multiply inherits.
+- How an explicit null cell can preserve the user's no-change intent when a
+  surrounding blanket edit exists, and how omission differs in that context.
+- Duplicate/overlap rules and whether a cell can be affected more than once
+  within a single layer.
+
+The operation still matters: adding to all coefficients can create routes from
+zero off-diagonal cells; multiplying all coefficients preserves those zeros.
+These are parameter operations, not full matrix multiplication.
 
 ## Questions for the layer proposal
 

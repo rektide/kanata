@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Records the human layer/animation direction and reviews and connects the commissioned Astra-high inheritance proposal
+    title: Records per-cell and blanket layer-operation requirements and connects the commissioned inheritance proposal and deferred animation desire
   - resource: /docs/config.adoc
     title: Implemented global linear and directional axis-map configuration
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
@@ -47,6 +47,9 @@ Starting examples:
   directional edits. Its [three decision groups](layer-transform-design0.gpt6a.md#decisions-to-accept-before-implementation)
   cover the parameter model, full active-stack precedence and runtime state
   boundaries; these remain proposals for human selection.
+- [Cell and blanket scope clarification](layer-transform-ask0.gpt6a.md#cell-and-blanket-scope):
+  individual coefficient edits are already in the proposal; an explicit blanket
+  operation and its interaction with cell-level exceptions need a design refinement.
 
 ## Deferred animation desire
 
