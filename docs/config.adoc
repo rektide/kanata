@@ -5139,84 +5139,187 @@ Monitoring permission in System Settings > Privacy & Security.
 ----
 
 [[mouse-axis-map]]
-=== Linux or Windows only: mouse-x-map, mouse-y-map, mouse-wheel-v-map, mouse-wheel-h-map
+=== Linux or Windows only: mouse-axis-map
 
-Remap physical mouse axes: swap and invert pointer movement (X/Y) and wheel
-(vertical/horizontal) axes, e.g. for a trackpad physically rotated 90 degrees
-whose axis swap should happen in software. This covers the flip/swap axis
-manipulation of Karabiner-Elements' `mouse_basic`.
+Map physical relative input axes to independently chosen output axes. Each
+output is a weighted sum of inputs. This supports scaling, inversion, swaps,
+rotation, multiple inputs feeding one output, one input feeding multiple
+outputs, and pointer/scroll cross-mapping.
 
-Each output axis draws from one input axis, optionally inverted:
-
-[cols="1,1,2"]
-|===
-|Option |Accepted values |Default
-
-|`mouse-x-map`
-|`x` \| `y` \| `-x` \| `-y`
-|`x`
-
-|`mouse-y-map`
-|`x` \| `y` \| `-x` \| `-y`
-|`y`
-
-|`mouse-wheel-v-map`
-|`v` \| `h` \| `-v` \| `-h`
-|`v`
-
-|`mouse-wheel-h-map`
-|`v` \| `h` \| `-v` \| `-h`
-|`h`
-|===
-
-Axis signs follow screen coordinates: pointer X grows rightward, pointer Y
-grows downward; the vertical wheel is positive scrolling up, the horizontal
-wheel positive scrolling right. A leading `-` inverts the axis.
-
-.Example: rotate pointer movement 90 degrees and invert vertical scrolling
+.Example: control the pointer with two scroll wheels as well as normal movement
 [source]
 ----
 (defcfg
-  mouse-x-map  y
-  mouse-y-map  -x
-  mouse-wheel-v-map -v
+  mouse-axis-map (
+    (x (x 1) (h 0.25))
+    (y (y 1) (v -0.25))
+    (v)
+    (h)
+  )
 )
 ----
 
-Karabiner equivalents: `flip_x` is `mouse-x-map -x`; `swap_xy` is
-`mouse-x-map y` plus `mouse-y-map x`; `flip_vertical_wheel` is
-`mouse-wheel-v-map -v`; and so on.
+The horizontal thumb wheel adds X movement; the vertical wheel adds Y
+movement. One full wheel notch contributes 30 pointer units. The empty `v`
+and `h` rows suppress scroll output, so the wheels move the pointer without
+also scrolling.
 
-Notes:
+*Syntax:* `mouse-axis-map ((output (input gain) ...) ...)`.
 
-- Wheel mappings must be permutations: `mouse-wheel-v-map` and
-  `mouse-wheel-h-map` must draw from different input wheel axes, because a
-  wheel event is a single key code and cannot feed two outputs.
-- Movement mappings may draw both outputs from the same input axis. The other
-  input axis is then discarded — the equivalent of Karabiner's `discard`.
-- Remapping applies to physical (passed-through) mouse input. Actions like
-  `movemouse-*` and `mwheel-*` that kanata generates itself are unaffected;
-  remap wheel input codes via `defsrc` (`mwu`/`mwd`/`mwl`/`mwr`) when you want
-  them to trigger kanata actions.
+- Each named output row *replaces* that output's default identity mapping.
+- Omitted output rows retain identity passthrough. An empty row, such as `(h)`,
+  suppresses that output.
+- Gains are finite numbers: `1` preserves magnitude, `-1` inverts, `0.5` halves,
+  and `0` contributes nothing. Fractions accumulate rather than being lost on
+  every event. Changing the matrix resets accumulated fractions.
+- Every source refers to physical input; rows apply simultaneously, not as a
+  chain of transformations.
+- Output rows and input terms within a row must be unique. The selected input
+  and output channel counts need not match.
 
-Platform support:
+==== Axes and units
 
-- Linux: movement and wheel remapping, live-reloadable.
-- Windows with the Interception driver: movement and wheel remapping.
-  Enabling movement remapping requires kanata to restart if mouse movement
-  events were not already being collected at startup.
-- Windows with the default low-level hook: wheel remapping and movement
-  remapping work, but movement remapping blocks each physical mouse move and
-  re-injects the mapped position, which adds slight movement latency.
-  Applications reading Raw Input (e.g. some games) still observe the
-  physical, unmapped events; use the Interception driver build for
-  transparent remapping.
-- macOS: not implemented yet; a non-identity mapping logs a warning and is
-  ignored.
+[cols="1,2,2"]
+|===
+|Name |Meaning |Backend support
+|`x`, `y` |Relative pointer movement, positive right/down |Linux, Windows
+|`v`, `h` |Vertical/horizontal wheel, positive up/right |Linux, Windows
+|`z` |Native relative Z |Linux
+|`rx`, `ry`, `rz` |Native rotational relative axes |Linux
+|`dial` |Native relative dial |Linux
+|`misc` |Native miscellaneous relative channel |Linux
+|===
 
-Unmapped wheel events re-emitted on Windows low-level hook are injected as
-one wheel notch per event, losing any high-resolution scroll granularity of
-the physical device.
+The Linux backend also covers Android. Its extra channels correspond to
+`REL_Z`, `REL_RX/RY/RZ`, `REL_DIAL`, and `REL_MISC`. They are available as
+both inputs and outputs. Unsupported axis names are rejected on other
+backends rather than limiting Linux's capabilities.
+
+Pointer and extra relative channels use native device counts. Wheels use
+high-resolution units: *120 units equal one notch*, including when the input
+device only reports whole notches. Thus `(x (h 0.25))` moves 30 pointer units
+per horizontal notch, and `(v (dial 120))` makes one dial step one scroll notch.
+Linux maps raw pointer counts before desktop acceleration; Windows LLHOOK
+maps post-acceleration screen displacement, so movement gains may feel different.
+
+`z` is a real Linux input/output channel; it is not a third desktop cursor
+coordinate or an alias for a scroll wheel. Applications must understand the
+extra native outputs to use them directly. Alternatively, map them into
+ordinary X/Y movement or scrolling.
+
+Two independently reported scroll wheels use `v` and `h`. Additional controls
+can be mapped if the device exposes them as another relative channel, such as
+`dial` or `z`. The high-resolution version of a wheel is the *same* channel,
+not another wheel. Controls reporting the same event code on the same device
+cannot be distinguished here. Device-qualified axis names are not supported;
+the mapping applies to all intercepted devices, subject to the existing
+device include/exclude configuration.
+
+==== More mapping examples
+
+.Independent gains and inversions for two wheels
+[source]
+----
+(defcfg mouse-axis-map (
+  (v (v -1))
+  (h (h 0.5))
+))
+----
+
+.Two wheel inputs into one output: both wheels scroll vertically
+[source]
+----
+(defcfg mouse-axis-map (
+  (v (v 1) (h 1))
+  (h)
+))
+----
+
+.One input into two outputs: the vertical wheel drives diagonal scrolling
+[source]
+----
+(defcfg mouse-axis-map (
+  (v (v 1))
+  (h (v 1))
+))
+----
+
+.Linux: a third relative control feeds scrolling; Z feeds pointer X
+[source]
+----
+(defcfg mouse-axis-map (
+  (v (v 1) (dial 120))
+  (x (x 1) (z 1))
+  (dial)
+  (z)
+))
+----
+
+For X/Y input and X/Y output the full matrix is:
+
+[source]
+----
+x-out = a * x-in + b * y-in
+y-out = c * x-in + d * y-in
+----
+
+Diagonal coefficients `a` and `d` give independent scaling/inversion.
+Off-diagonal coefficients `b` and `c` are needed for swaps, rotation, and
+mixing. For a quarter turn use `(x (y 1)) (y (x -1))`. A rectangular
+input/output selection uses the same named-row syntax; there is no requirement
+to provide a square table of zeros.
+
+Complete configs to start from:
+
+- `cfg_samples/mouse-axis-dual-wheel.kbd`: independent two-wheel mapping.
+- `cfg_samples/mouse-axis-wheel-pointer.kbd`: both wheels control the pointer.
+- `cfg_samples/mouse-axis-extended.kbd`: Linux Z, rotational and dial channels.
+- `cfg_samples/mouse-axis-remap.kbd`: simple quarter-turn shorthand.
+
+==== Processing and platform support
+
+- Mapping applies to physical relative input. Generated `movemouse-*` and
+  `mwheel-*` actions do not pass through it again. Absolute tablet/touch
+  coordinates are not transformed.
+- Transformed wheel directions listed in `defsrc`/`deflayermap` become key
+  taps at full-notch boundaries. Unmapped directions retain high-resolution
+  deltas. Mixed inputs are summed before quantization and key-tap generation.
+- Linux transforms complete input reports and deduplicates legacy/high-resolution
+  wheel data separately for each wheel. A non-identity mapping enables `any`
+  device detection by default; explicit detection settings and include/exclude
+  filters still take precedence. Mapping changes are live-reloadable.
+- Windows Interception supports X/Y/V/H with native relative deltas. It preserves
+  the other components of combined button/movement/wheel strokes. Adding mouse
+  interception or movement interception after startup requires a restart.
+- Windows LLHOOK supports X/Y/V/H using block/re-inject. It retains partial and
+  multiple wheel notches. Cursor movement uses screen-position differences,
+  so screen edges and other cursor repositioning can limit it; applications
+  reading Raw Input can still see physical events. Interception is preferable
+  for raw movement mapping. If the mouse hook was absent at startup, restart
+  to enable it.
+- macOS axis mapping remains unimplemented; configuring a non-identity mapping
+  logs a warning.
+
+==== Per-output shorthand: mouse-x-map, mouse-y-map, mouse-wheel-v-map, mouse-wheel-h-map
+
+These options each take one supported input axis, optionally prefixed by `-`
+to invert it. Defaults are `x`, `y`, `v`, and `h`, respectively. They compile
+to the same output rows but cannot be combined with `mouse-axis-map`.
+
+[source]
+----
+(defcfg
+  mouse-x-map y
+  mouse-y-map -x
+  mouse-wheel-v-map h
+  mouse-wheel-h-map -v
+)
+----
+
+This rotates pointer movement and swaps/inverts the wheels. Wheel sources do
+not have to be permutations: duplication and mixing are supported by the
+analog pipeline. Use an empty matrix row to discard an output without
+duplicating another channel.
 
 [[linux-only-linux-dev]]
 === Linux only: linux-dev

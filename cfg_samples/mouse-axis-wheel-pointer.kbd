@@ -1,0 +1,21 @@
+#|
+Main wheel + thumb wheel drive pointer Y/X. Normal pointer movement also works.
+120 wheel units = one notch, so 0.25 produces 30 pointer units per notch.
+Empty v/h output rows suppress scrolling while the wheels move the pointer.
+
+To keep scrolling as well, remove the empty (v) and (h) rows.
+To use ONLY the wheels for pointer movement, remove (x 1) and (y 1).
+See docs/config.adoc, mouse-axis-map.
+|#
+
+(defcfg
+  process-unmapped-keys no
+  mouse-axis-map (
+    (x (x 1) (h 0.25))
+    (y (y 1) (v -0.25))
+    (v)
+    (h)
+  )
+)
+(defsrc)
+(deflayer base)

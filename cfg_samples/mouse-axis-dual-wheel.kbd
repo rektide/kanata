@@ -1,0 +1,21 @@
+#|
+Two independent wheels, such as a main wheel plus a horizontal thumb wheel.
+Vertical scrolling is inverted; horizontal scrolling runs at half speed.
+Fractional high-resolution deltas accumulate rather than being dropped.
+
+For a wheel swap replace the rows with (v (h 1)) and (h (v -1)).
+For both wheels to scroll vertically use (v (v 1) (h 1)) and (h).
+See docs/config.adoc, mouse-axis-map.
+|#
+
+(defcfg
+  process-unmapped-keys no
+  ;; Optional Linux device selection; use the names advertised by your device.
+  ;; linux-dev-names-include ("Keychron Keychron Ultra-Link 8K")
+  mouse-axis-map (
+    (v (v -1))
+    (h (h 0.5))
+  )
+)
+(defsrc)
+(deflayer base)

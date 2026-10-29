@@ -1,0 +1,34 @@
+#|
+Linux/Android relative-axis example for devices that expose extra controls.
+These names correspond to real evdev relative codes, not invented wheel IDs.
+Check the device's EV_REL capabilities: an EV_ABS axis is not transformed.
+
+- rx/ry add pointer movement.
+- z and dial add vertical scrolling; one dial step is one notch.
+- rz adds horizontal scrolling.
+- misc is routed to native Z output for an application that understands it.
+
+This uses more input channels than output channels. Missing input channels
+contribute zero. Desktop cursors do not gain a third spatial coordinate:
+native Z output is for a consumer that understands REL_Z.
+See docs/config.adoc, mouse-axis-map.
+|#
+
+(defcfg
+  process-unmapped-keys no
+  ;; Narrow device selection using linux-dev or linux-dev-names-include as needed.
+  mouse-axis-map (
+    (x (x 1) (rx 0.5))
+    (y (y 1) (ry 0.5))
+    (v (v 1) (z -12) (dial 120))
+    (h (h 1) (rz 12))
+    (z (misc 1))
+    (rx)
+    (ry)
+    (rz)
+    (dial)
+    (misc)
+  )
+)
+(defsrc)
+(deflayer base)
