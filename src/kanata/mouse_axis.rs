@@ -5,9 +5,22 @@ use super::Kanata;
 use anyhow::Result;
 use kanata_parser::cfg::{Cfg, LayerInfo};
 use kanata_parser::keys::OsCode;
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows",
+    test
+))]
+pub(crate) use kanata_parser::mouse_axis::AxisValues;
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows",
+    test
+))]
 use kanata_parser::mouse_axis::MouseAxisTransform;
 use kanata_parser::mouse_axis::program::{CaptureRequirements, canonical_layer_order};
-pub(crate) use kanata_parser::mouse_axis::{AXIS_COUNT, AxisValues, MouseAxis, MouseAxisMap};
+pub(crate) use kanata_parser::mouse_axis::{AXIS_COUNT, MouseAxis, MouseAxisMap};
 use std::sync::Arc;
 
 pub(crate) mod capture;
@@ -29,6 +42,12 @@ impl WheelMask {
         OsCode::MouseWheelLeft,
     ];
 
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "windows",
+        test
+    ))]
     pub fn contains(self, code: OsCode) -> bool {
         Self::CODES
             .iter()
@@ -36,6 +55,12 @@ impl WheelMask {
             .is_some_and(|i| self.0[i])
     }
 
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "windows",
+        test
+    ))]
     pub fn is_wheel(code: OsCode) -> bool {
         Self::CODES.contains(&code)
     }
@@ -272,6 +297,12 @@ impl Kanata {
 }
 
 #[derive(Default)]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows",
+    test
+))]
 pub(crate) struct AxisState {
     pub transform: MouseAxisTransform,
     pub wheel_key_remainder: [i32; 2],
@@ -279,6 +310,12 @@ pub(crate) struct AxisState {
     observed: Option<(u64, [u64; AXIS_COUNT])>,
 }
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows",
+    test
+))]
 impl AxisState {
     /// Must run before identity and all other early-return paths. This is the
     /// sole reset authority; do not follow it with legacy all-map reconfigure.

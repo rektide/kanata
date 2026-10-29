@@ -100,12 +100,6 @@ pub use millisecond_counting::*;
 mod scroll;
 use scroll::*;
 
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "windows",
-    test
-))]
 mod mouse_axis;
 
 mod sequences;

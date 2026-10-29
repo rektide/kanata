@@ -131,6 +131,12 @@ impl CaptureStatus {
         }
     }
 
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "windows",
+        test
+    ))]
     pub fn installed(&mut self, actual: CaptureCapabilities) {
         log::debug!(
             "motion capture installed: {actual:?} (startup plan {:?})",
