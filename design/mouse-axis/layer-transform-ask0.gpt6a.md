@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human requests cell/matrix/scalar forms and both multiplication kinds; parent preserves the evolving ask and reviews and connects the consolidated Astra-high response
+    title: Human develops the cell/matrix/scalar requirements and commissions Sol xhigh implementation after Astra readiness and implementation notes; parent preserves the scope and design history
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -45,10 +45,10 @@ are promising, with explicit null values and three arithmetic cases:
 > “an inherited multiplier too, so either addition or multiplication. or
 > absolute! those are kind of the three core cases”
 
-This document preserves the ask and rough animation ideas. It does not select
-final configuration syntax or authorize implementation of layer transforms or
-animation. The corresponding proposal should distinguish recommendations from
-accepted runtime behavior.
+This document preserves the evolving ask and rough animation ideas. The initial
+commission was design-only; the later [implementation commission](#implementation-commission)
+authorizes the next step subject to a readiness review. Proposed configuration
+syntax remains distinct from available runtime behavior until implementation.
 
 The commissioned [Astra-high response](layer-transform-design0.gpt6a.md) is now
 available. It recommends independent output gains and routing coefficients,
@@ -204,6 +204,29 @@ composition factors require numeric values. Its
 [decision section](layer-transform-design1.gpt6a.md#decisions-before-implementation)
 identifies the single-map tradeoff and representable directional products for
 human selection before implementation.
+
+<a id="implementation-commission"></a>
+
+## Implementation commission
+
+After receiving the consolidated proposal, the human directed:
+
+> “use sol xh to implement, if the proposal is ready for it”
+
+They also requested suggested implementation notes from Astra as the starting
+point, rather than handing Sol only the design. The next sequence is therefore:
+
+1. Astra high checks the consolidated proposal against actual code and writes
+   actionable implementation notes, identifying genuine readiness blockers.
+2. The parent reviews those notes and any consequential unresolved behavior.
+3. Sol xhigh implements the bounded consolidated contract when ready, with
+   coherent commits, meaningful checks and parent architectural review.
+
+The target is [design1](layer-transform-design1.gpt6a.md): ordered cell/matrix/scalar
+edits, distinct elementwise and true products, sparse nullable coefficient
+operands, numeric composition factors, full-stack layer resolution and explicit
+publication/capture/state behavior. Earlier gain-family and blanket-specificity
+recommendations remain historical alternatives. Animation remains deferred.
 
 ## Questions for the layer proposal
 

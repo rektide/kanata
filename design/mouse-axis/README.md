@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Records the cell/matrix/scalar direction and reviews and connects the consolidated ordered-operation proposal with its design history and deferred animation desire
+    title: Connects the cell/matrix/scalar design history and the human commission for Astra implementation notes followed by Sol xhigh implementation
   - resource: /docs/config.adoc
     title: Implemented global linear and directional axis-map configuration
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
@@ -38,7 +38,12 @@ Starting examples:
 - [Output axes absent from the physical mouse](/cfg_samples/mouse-axis-generated.kbd).
 - [Independent directional branches](/cfg_samples/mouse-axis-directional.kbd).
 
-## Layer-controlled transforms — current design question
+## Layer-controlled transforms — implementation preparation
+
+- [Implementation commission](layer-transform-ask0.gpt6a.md#implementation-commission):
+  the human requests Astra-high readiness and implementation notes, followed by
+  Sol-xhigh implementation of the consolidated proposal when ready. Runtime
+  support is still described by the configuration reference above.
 
 - [Latest scope direction](layer-transform-ask0.gpt6a.md#cell-matrix-scalar):
   cell, matrix and scalar operands should coexist, with coefficient-wise
@@ -49,7 +54,8 @@ Starting examples:
   operands and numeric composition factors have separate contracts. Its
   [decision section](layer-transform-design1.gpt6a.md#decisions-before-implementation)
   calls out the single-map versus independent-gain tradeoff, null boundary and
-  directional composition limits; these remain recommendations for selection.
+  directional composition limits for the readiness review and implementation
+  handoff.
 - [Human ask and design commission](layer-transform-ask0.gpt6a.md): precision and
   boost layers for X/Y and other channels; null inheritance; absolute, additive
   and multiplicative parameter operations; questions about gains, matrix
