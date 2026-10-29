@@ -902,12 +902,13 @@ pub fn parse_cfg_raw_string(
     // is mapped, regardless of whether it was named in defsrc or deflayermap.
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "unknown"))]
     if cfg.linux_opts.linux_device_detect_mode.is_none() {
-        cfg.linux_opts.linux_device_detect_mode =
-            Some(if mapped_keys.iter().any(|k| k.is_mouse_code()) {
+        cfg.linux_opts.linux_device_detect_mode = Some(
+            if !cfg.mouse_axis_map.is_identity() || mapped_keys.iter().any(|k| k.is_mouse_code()) {
                 DeviceDetectMode::Any
             } else {
                 DeviceDetectMode::KeyboardMice
-            });
+            },
+        );
     }
 
     resolve_chord_groups(&mut klayers, s)?;

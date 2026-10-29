@@ -1,8 +1,9 @@
 //! Linear mapping of relative pointer and wheel deltas.
 //!
-//! Rows name outputs, columns name inputs. The supported OS channels currently
-//! form a four-dimensional space, but a mapping can use any subset on either
-//! side: it need not be a permutation or have equal input/output counts.
+//! Rows name outputs, columns name inputs. A mapping can use any subset on either
+//! side: it need not be a permutation or have equal input/output counts. The
+//! channel vocabulary includes Linux's extra relative axes; each OS adapter
+//! validates its capabilities rather than limiting all platforms to X/Y/V/H.
 //! Pointer units are native relative counts; wheel units are 1/120 of a notch.
 
 use crate::keys::OsCode;
@@ -14,14 +15,31 @@ pub enum MouseAxis {
     Y,
     V,
     H,
+    Z,
+    Rx,
+    Ry,
+    Rz,
+    Dial,
+    Misc,
 }
 
-pub const AXIS_COUNT: usize = 4;
+pub const AXIS_COUNT: usize = MouseAxis::ALL.len();
 pub type AxisValues = [i32; AXIS_COUNT];
 pub type AxisRow = [f64; AXIS_COUNT];
 
 impl MouseAxis {
-    pub const ALL: [Self; AXIS_COUNT] = [Self::X, Self::Y, Self::V, Self::H];
+    pub const ALL: [Self; 10] = [
+        Self::X,
+        Self::Y,
+        Self::V,
+        Self::H,
+        Self::Z,
+        Self::Rx,
+        Self::Ry,
+        Self::Rz,
+        Self::Dial,
+        Self::Misc,
+    ];
     pub const WHEELS: [Self; 2] = [Self::V, Self::H];
 
     pub fn parse(name: &str) -> Option<Self> {
@@ -30,8 +48,41 @@ impl MouseAxis {
             "y" => Some(Self::Y),
             "v" => Some(Self::V),
             "h" => Some(Self::H),
+            "z" => Some(Self::Z),
+            "rx" => Some(Self::Rx),
+            "ry" => Some(Self::Ry),
+            "rz" => Some(Self::Rz),
+            "dial" => Some(Self::Dial),
+            "misc" => Some(Self::Misc),
             _ => None,
         }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+            Self::V => "v",
+            Self::H => "h",
+            Self::Z => "z",
+            Self::Rx => "rx",
+            Self::Ry => "ry",
+            Self::Rz => "rz",
+            Self::Dial => "dial",
+            Self::Misc => "misc",
+        }
+    }
+
+    pub fn is_wheel(self) -> bool {
+        matches!(self, Self::V | Self::H)
+    }
+
+    pub fn supported(self) -> bool {
+        cfg!(any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "unknown"
+        )) || matches!(self, Self::X | Self::Y | Self::V | Self::H)
     }
 
     pub fn wheel_code(self, positive: bool) -> Option<OsCode> {
@@ -140,27 +191,43 @@ impl MouseAxisTransform {
 mod tests {
     use super::*;
 
+    fn values(x: i32, y: i32, v: i32, h: i32) -> AxisValues {
+        let mut values = [0; AXIS_COUNT];
+        values[..4].copy_from_slice(&[x, y, v, h]);
+        values
+    }
+
+    fn row(x: f64, y: f64, v: f64, h: f64) -> AxisRow {
+        let mut row = [0.0; AXIS_COUNT];
+        row[..4].copy_from_slice(&[x, y, v, h]);
+        row
+    }
+
     #[test]
     fn full_matrix_mixes_axes_and_cancels_before_quantization() {
         let mut transform = MouseAxisTransform::default();
-        transform.map.rows[0] = [0.5, -0.5, 0.0, 0.0];
-        transform.map.rows[1] = [0.5, 0.5, 0.0, 0.0];
-        assert_eq!(transform.apply([3, 3, 0, 0]), [0, 3, 0, 0]);
-        assert_eq!(transform.apply([4, -2, 0, 0]), [3, 1, 0, 0]);
+        transform.map.rows[0] = row(0.5, -0.5, 0.0, 0.0);
+        transform.map.rows[1] = row(0.5, 0.5, 0.0, 0.0);
+        assert_eq!(transform.apply(values(3, 3, 0, 0)), values(0, 3, 0, 0));
+        assert_eq!(transform.apply(values(4, -2, 0, 0)), values(3, 1, 0, 0));
     }
 
     #[test]
     fn wheels_can_drive_pointer_and_fan_out() {
         let mut transform = MouseAxisTransform::default();
-        transform.map.rows = [
-            [0.0, 0.0, 0.0, 0.25],
-            [0.0, 0.0, -0.25, 0.0],
-            [0.0; AXIS_COUNT],
-            [0.0; AXIS_COUNT],
-        ];
-        assert_eq!(transform.apply([0, 0, 120, 240]), [60, -30, 0, 0]);
-        transform.map.rows[2] = [0.0, 0.0, 1.0, 1.0];
-        assert_eq!(transform.apply([0, 0, 120, -120]), [-30, -30, 0, 0]);
+        transform.map.rows[0] = row(0.0, 0.0, 0.0, 0.25);
+        transform.map.rows[1] = row(0.0, 0.0, -0.25, 0.0);
+        transform.map.rows[2] = [0.0; AXIS_COUNT];
+        transform.map.rows[3] = [0.0; AXIS_COUNT];
+        assert_eq!(
+            transform.apply(values(0, 0, 120, 240)),
+            values(60, -30, 0, 0)
+        );
+        transform.map.rows[2] = row(0.0, 0.0, 1.0, 1.0);
+        assert_eq!(
+            transform.apply(values(0, 0, 120, -120)),
+            values(-30, -30, 0, 0)
+        );
         assert!(transform.map.maps_wheel());
     }
 
@@ -169,13 +236,13 @@ mod tests {
         let mut transform = MouseAxisTransform::default();
         transform.map.rows[0][0] = 0.1;
         for _ in 0..9 {
-            assert_eq!(transform.apply([1, 0, 0, 0])[0], 0);
+            assert_eq!(transform.apply(values(1, 0, 0, 0))[0], 0);
         }
-        assert_eq!(transform.apply([1, 0, 0, 0])[0], 1);
+        assert_eq!(transform.apply(values(1, 0, 0, 0))[0], 1);
         for _ in 0..9 {
-            assert_eq!(transform.apply([-1, 0, 0, 0])[0], 0);
+            assert_eq!(transform.apply(values(-1, 0, 0, 0))[0], 0);
         }
-        assert_eq!(transform.apply([-1, 0, 0, 0])[0], -1);
+        assert_eq!(transform.apply(values(-1, 0, 0, 0))[0], -1);
         assert_eq!(transform.remainder, [0.0; AXIS_COUNT]);
     }
 
@@ -193,17 +260,34 @@ mod tests {
     fn map_change_resets_fractional_state() {
         let mut transform = MouseAxisTransform::default();
         transform.map.rows[0][0] = 0.5;
-        assert_eq!(transform.apply([1, 0, 0, 0])[0], 0);
+        assert_eq!(transform.apply(values(1, 0, 0, 0))[0], 0);
         assert!(transform.reconfigure(MouseAxisMap::default()));
         assert_eq!(transform.remainder, [0.0; AXIS_COUNT]);
-        assert_eq!(transform.apply([1, 0, 0, 0])[0], 1);
+        assert_eq!(transform.apply(values(1, 0, 0, 0))[0], 1);
     }
 
     #[test]
     fn inversion_saturates_minimum_and_recovers() {
         let mut transform = MouseAxisTransform::default();
         transform.map.rows[0][0] = -1.0;
-        assert_eq!(transform.apply([i32::MIN, 0, 0, 0])[0], i32::MAX);
-        assert_eq!(transform.apply([1, 0, 0, 0])[0], -1);
+        assert_eq!(transform.apply(values(i32::MIN, 0, 0, 0))[0], i32::MAX);
+        assert_eq!(transform.apply(values(1, 0, 0, 0))[0], -1);
+    }
+
+    #[test]
+    fn extended_axes_can_feed_pointer_and_receive_other_inputs() {
+        let mut transform = MouseAxisTransform::default();
+        transform.map.rows[MouseAxis::X as usize] = [0.0; AXIS_COUNT];
+        transform.map.rows[MouseAxis::X as usize][MouseAxis::Z as usize] = 2.0;
+        transform.map.rows[MouseAxis::X as usize][MouseAxis::Dial as usize] = -1.0;
+        transform.map.rows[MouseAxis::Rz as usize] = [0.0; AXIS_COUNT];
+        transform.map.rows[MouseAxis::Rz as usize][MouseAxis::V as usize] = 0.5;
+        let mut input = values(0, 0, 120, 0);
+        input[MouseAxis::Z as usize] = 3;
+        input[MouseAxis::Dial as usize] = 2;
+        let output = transform.apply(input);
+        assert_eq!(output[MouseAxis::X as usize], 4);
+        assert_eq!(output[MouseAxis::Rz as usize], 60);
+        assert_eq!(output[MouseAxis::Z as usize], 3); // omitted row passes through
     }
 }

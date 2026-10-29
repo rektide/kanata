@@ -65,6 +65,22 @@ mod linux {
     }
 
     #[test]
+    fn axis_mapping_enables_mouse_and_extended_device_discovery() {
+        let cfg = parse_cfg("(defcfg mouse-axis-map ((v (dial 120)))) (defsrc) (deflayer base)")
+            .expect("axis-only config");
+        assert_eq!(
+            cfg.options.linux_opts.linux_device_detect_mode,
+            Some(DeviceDetectMode::Any)
+        );
+        let cfg = parse_cfg("(defcfg linux-device-detect-mode keyboard-only mouse-x-map -x) (defsrc) (deflayer base)")
+            .expect("explicit detection policy wins");
+        assert_eq!(
+            cfg.options.linux_opts.linux_device_detect_mode,
+            Some(DeviceDetectMode::KeyboardOnly)
+        );
+    }
+
+    #[test]
     fn deflayermap_mouse_sets_detect_mode_any() {
         // Issue #2096: a mouse button listed ONLY in deflayermap (not defsrc) must still
         // cause Linux to grab mouse devices (DeviceDetectMode::Any), because parse_layers

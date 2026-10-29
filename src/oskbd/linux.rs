@@ -147,15 +147,14 @@ impl KbdIn {
                 return Ok(vec![]);
             }
 
-            const EVENT_LIMIT: usize = 48;
-
             let mut do_rediscover = false;
             for event in &self.events {
                 if let Some((device, _)) = self.devices.get_mut(&event.token()) {
                     if let Err(e) = device.fetch_events().map(|evs| {
-                        evs.into_iter()
-                            .take(EVENT_LIMIT)
-                            .for_each(|ev| input_events.push(ev))
+                        // Keep complete SYN_REPORT packets. Truncating this
+                        // iterator can drop an axis or the hi-res companion
+                        // of a wheel event before the report transform sees it.
+                        input_events.extend(evs)
                     }) {
                         // Currently the kind() is uncategorized... not helpful, need to match
                         // on os error.

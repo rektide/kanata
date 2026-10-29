@@ -1,5 +1,4 @@
 use kanata_parser::cfg::WinSyncKeystateBehaviour;
-use kanata_parser::custom_action::MWheelDirection;
 use parking_lot::Mutex;
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -7,6 +6,7 @@ use std::sync::mpsc::{Receiver, RecvError, SyncSender as Sender, TryRecvError, s
 use std::time;
 
 use super::PRESSED_KEYS;
+use crate::kanata::mouse_axis::{AXIS_COUNT, AxisState, MouseAxis};
 use crate::kanata::*;
 
 impl Kanata {
@@ -117,67 +117,68 @@ impl Kanata {
                 std::sync::mpsc::channel::<crate::oskbd::AxisInjection>();
             std::thread::spawn(move || {
                 while let Ok(injection) = axis_injection_rx.recv() {
-                    injection.emit();
+                    injection
+                        .emit()
+                        .expect("failed to inject mapped mouse axes");
                 }
             });
+            let mut axis_state = AxisState::default();
             let mousehook = MouseHook::set_input_cb(move |mouse_event| {
                 log::debug!("llhook mouse event: {mouse_event:?}");
-                // Physical movement remapping: block the OS move and
-                // re-inject the mapped position via the injection thread.
-                // The map is read live so a reload back to identity simply
-                // passes moves through again.
-                let maps_movement = mouse_axis_map.lock().maps_movement();
-                if maps_movement
-                    && let crate::oskbd::MouseEventType::Move(crate::oskbd::MouseMoveEvent {
-                        point: Some(point),
-                    }) = mouse_event
-                {
-                    match crate::oskbd::previous_mouse_move_point() {
-                        Some(previous) => {
-                            let (dx, dy) = (point.x - previous.x, point.y - previous.y);
-                            let (mapped_dx, mapped_dy) = mouse_axis_map.lock().map_movement(dx, dy);
-                            axis_injection_tx
-                                .send(crate::oskbd::AxisInjection::Move {
-                                    x: previous.x + mapped_dx,
-                                    y: previous.y + mapped_dy,
-                                })
-                                .ok();
-                            true
-                        }
-                        // The first observed move only seeds the tracking.
-                        None => false,
+                let map = *mouse_axis_map.lock();
+                let mut input = [0; AXIS_COUNT];
+                let is_axis_event = match mouse_event {
+                    MouseEventType::Move(MouseMoveEvent { point: Some(point) })
+                        if map.maps_movement() =>
+                    {
+                        let Some(current) = current_mouse_point() else {
+                            return false;
+                        };
+                        input[MouseAxis::X as usize] = point.x.saturating_sub(current.x);
+                        input[MouseAxis::Y as usize] = point.y.saturating_sub(current.y);
+                        true
                     }
-                } else {
-                    let mut key_event = match KeyEvent::try_from(mouse_event) {
-                        Ok(ev) => ev,
-                        _ => return false,
-                    };
-                    // Wheel events: map the wheel key code before the
-                    // mapping check so remapped wheels observe the mapped
-                    // direction.
-                    key_event.code = mouse_axis_map.lock().map_wheel_code(key_event.code);
-                    let oscode = key_event.code;
-                    if !MAPPED_KEYS.lock().contains(&oscode) {
-                        // Unmapped wheel whose axes are remapped: block the
-                        // original event and inject the mapped one instead.
-                        if mouse_axis_map.lock().maps_wheel()
-                            && key_event.value == KeyValue::Tap
-                            && let Ok(direction) = MWheelDirection::try_from(oscode)
-                        {
-                            axis_injection_tx
-                                .send(crate::oskbd::AxisInjection::Wheel {
-                                    direction,
-                                    distance: crate::oskbd::HI_RES_SCROLL_UNITS_IN_LO_RES,
-                                })
-                                .ok();
-                            return true;
-                        }
-                        return false;
+                    MouseEventType::Wheel(wheel) if !map.is_identity() => {
+                        let axis = match wheel.wheel {
+                            MouseWheel::Vertical => MouseAxis::V,
+                            MouseWheel::Horizontal => MouseAxis::H,
+                            _ => return false,
+                        };
+                        input[axis as usize] = wheel.delta.into();
+                        true
                     }
-                    log::debug!("event loop - mouse: {:?}", key_event);
-                    try_send_panic(&preprocess_tx, key_event);
-                    true
+                    _ => false,
+                };
+                // Also reconfigure on identity so re-enabling a transform
+                // cannot revive fractions left over from the old mapping.
+                let mut output = axis_state.apply(map, input);
+                if is_axis_event {
+                    axis_state
+                        .route_wheels(
+                            &mut output,
+                            |code| MAPPED_KEYS.lock().contains(&code),
+                            |code| {
+                                try_send_panic(&preprocess_tx, KeyEvent::new(code, KeyValue::Tap));
+                                Ok(())
+                            },
+                        )
+                        .expect("route wheel taps");
+                    if output.iter().any(|value| *value != 0) {
+                        axis_injection_tx
+                            .send(crate::oskbd::AxisInjection { deltas: output })
+                            .expect("mouse axis output thread disconnected");
+                    }
+                    return true;
                 }
+                let key_event = match KeyEvent::try_from(mouse_event) {
+                    Ok(ev) => ev,
+                    _ => return false,
+                };
+                if !MAPPED_KEYS.lock().contains(&key_event.code) {
+                    return false;
+                }
+                try_send_panic(&preprocess_tx, key_event);
+                true
             });
             log::info!("Installed mouse hook callback successfully.");
             Some(mousehook)

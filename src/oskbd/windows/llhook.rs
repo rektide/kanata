@@ -353,7 +353,7 @@ fn send_xbtn(flag: u32, xbtn: u16) {
     }
 }
 
-pub(crate) fn scroll(direction: MWheelDirection, distance: u16) {
+fn scroll(direction: MWheelDirection, distance: u16) {
     unsafe {
         let mut inputs: [INPUT; 1] = mem::zeroed();
         inputs[0].type_ = INPUT_MOUSE;
@@ -371,7 +371,7 @@ pub(crate) fn scroll(direction: MWheelDirection, distance: u16) {
     }
 }
 
-pub(crate) fn hscroll(direction: MWheelDirection, distance: u16) {
+fn hscroll(direction: MWheelDirection, distance: u16) {
     unsafe {
         let mut inputs: [INPUT; 1] = mem::zeroed();
         inputs[0].type_ = INPUT_MOUSE;
@@ -424,16 +424,21 @@ fn move_mouse_xy(x: i32, y: i32) {
 /// movement: injecting the target position (rather than a relative delta)
 /// avoids applying pointer acceleration a second time to an already
 /// accelerated delta.
-pub(crate) fn move_mouse_abs_px(x: i32, y: i32) {
+fn move_mouse_abs_px(x: i32, y: i32) -> Result<(), io::Error> {
     unsafe {
         let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
         let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
         // Absolute coordinates run 0..=65535 across the virtual desktop.
         let vw = (GetSystemMetrics(SM_CXVIRTUALSCREEN) as i64).max(2) - 1;
         let vh = (GetSystemMetrics(SM_CYVIRTUALSCREEN) as i64).max(2) - 1;
-        let nx = (((x - vx) as i64) * 65535 / vw).clamp(0, 65535) as i32;
-        let ny = (((y - vy) as i64) * 65535 / vh).clamp(0, 65535) as i32;
-        set_mouse_xy(nx, ny);
+        let nx = ((i64::from(x) - i64::from(vx)) * 65535 / vw).clamp(0, 65535) as i32;
+        let ny = ((i64::from(y) - i64::from(vy)) * 65535 / vh).clamp(0, 65535) as i32;
+        inject_axis_event(
+            MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK,
+            0,
+            nx,
+            ny,
+        )
     }
 }
 
@@ -444,29 +449,53 @@ pub(crate) fn move_mouse_abs_px(x: i32, y: i32) {
 /// it, and injecting while holding the kanata lock risks lock cycles with
 /// the hook approval path.
 #[derive(Copy, Clone, Debug)]
-pub enum AxisInjection {
-    /// Absolute move to a virtual-desktop pixel position.
-    Move { x: i32, y: i32 },
-    /// Wheel scroll in a mapped direction.
-    Wheel {
-        direction: MWheelDirection,
-        distance: u16,
-    },
+pub struct AxisInjection {
+    pub deltas: kanata_parser::mouse_axis::AxisValues,
 }
 
 impl AxisInjection {
-    pub fn emit(self) {
-        match self {
-            AxisInjection::Move { x, y } => move_mouse_abs_px(x, y),
-            AxisInjection::Wheel {
-                direction,
-                distance,
-            } => match direction {
-                MWheelDirection::Up | MWheelDirection::Down => scroll(direction, distance),
-                MWheelDirection::Left | MWheelDirection::Right => hscroll(direction, distance),
-            },
+    pub fn emit(self) -> Result<(), io::Error> {
+        use kanata_parser::mouse_axis::MouseAxis;
+        let x = self.deltas[MouseAxis::X as usize];
+        let y = self.deltas[MouseAxis::Y as usize];
+        if x != 0 || y != 0 {
+            // Add at emission time: queued physical events each contribute a
+            // delta, rather than overwriting one another's absolute targets.
+            let current = current_mouse_point().ok_or_else(io::Error::last_os_error)?;
+            move_mouse_abs_px(current.x.saturating_add(x), current.y.saturating_add(y))?;
         }
+        for (axis, flag) in [
+            (MouseAxis::V, MOUSEEVENTF_WHEEL),
+            (MouseAxis::H, MOUSEEVENTF_HWHEEL),
+        ] {
+            let mut delta = i64::from(self.deltas[axis as usize]);
+            while delta != 0 {
+                let part = delta.clamp(i16::MIN as i64, i16::MAX as i64) as i32;
+                inject_axis_event(flag, part as u32, 0, 0)?;
+                delta -= i64::from(part);
+            }
+        }
+        Ok(())
     }
+}
+
+fn inject_axis_event(flags: u32, data: u32, dx: i32, dy: i32) -> Result<(), io::Error> {
+    let mut input: INPUT = unsafe { mem::zeroed() };
+    input.type_ = INPUT_MOUSE;
+    unsafe {
+        *input.u.mi_mut() = MOUSEINPUT {
+            dx,
+            dy,
+            mouseData: data,
+            dwFlags: flags,
+            time: 0,
+            dwExtraInfo: 0,
+        };
+    }
+    if unsafe { SendInput(1, &mut input, mem::size_of::<INPUT>() as c_int) } != 1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn set_mouse_xy(x: i32, y: i32) {

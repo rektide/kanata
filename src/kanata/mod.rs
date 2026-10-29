@@ -98,6 +98,14 @@ pub use millisecond_counting::*;
 mod scroll;
 use scroll::*;
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows",
+    test
+))]
+mod mouse_axis;
+
 mod sequences;
 use sequences::*;
 
@@ -348,8 +356,7 @@ pub struct Kanata {
         target_os = "unknown"
     ))]
     pub(crate) mouse_movement_key: Arc<Mutex<Option<OsCode>>>,
-    /// Physical mouse axis mapping (defcfg `mouse-x-map` / `mouse-y-map` /
-    /// `mouse-wheel-v-map` / `mouse-wheel-h-map`). Shared with the OS input
+    /// Physical mouse axis mapping (defcfg `mouse-axis-map` or shorthand). Shared with the OS input
     /// loops so live reload updates the transform they apply to passed-
     /// through mouse movement and wheel events.
     pub(crate) mouse_axis_map: Arc<Mutex<MouseAxisMap>>,
@@ -388,7 +395,7 @@ impl From<MoveDirection> for Axis {
 fn warn_unsupported_mouse_axis_map(map: &MouseAxisMap) {
     if !map.is_identity() {
         log::warn!(
-            "mouse axis mapping (mouse-x-map/mouse-y-map/mouse-wheel-v-map/mouse-wheel-h-map) \
+            "mouse axis mapping (mouse-axis-map or mouse-*-map) \
              is not implemented on macOS yet; the configuration is ignored"
         );
     }
@@ -911,6 +918,25 @@ impl Kanata {
         self.print_layer(cur_layer);
         self.macro_on_press_cancel_duration = 0;
 
+        #[cfg(target_os = "windows")]
+        if self.mouse_axis_map.lock().is_identity() && !cfg.options.mouse_axis_map.is_identity() {
+            log::warn!(
+                "If mouse input was not enabled at startup, restart Kanata to enable axis mapping."
+            );
+        }
+        #[cfg(all(target_os = "windows", feature = "interception_driver"))]
+        if !self.mouse_axis_map.lock().maps_movement()
+            && cfg.options.mouse_axis_map.maps_movement()
+            && self.mouse_movement_key.lock().is_none()
+        {
+            log::warn!(
+                "If relative movement interception was not enabled at startup, restart Kanata to map movement axes."
+            );
+        }
+        // This update also belongs to LLHOOK, which has no mouse_movement_key.
+        *self.mouse_axis_map.lock() = cfg.options.mouse_axis_map;
+        warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
+
         #[cfg(any(
             all(target_os = "windows", feature = "interception_driver"),
             target_os = "linux",
@@ -928,30 +954,9 @@ impl Kanata {
                         "defcfg option mouse-movement-key will not take effect until kanata is restarted!"
                     );
                 }
-                if !self.mouse_axis_map.lock().maps_movement()
-                    && cfg.options.mouse_axis_map.maps_movement()
-                {
-                    log::warn!(
-                        "defcfg option mouse-x-map/mouse-y-map movement remapping will not take effect until kanata is restarted!"
-                    );
-                }
-            }
-            #[cfg(all(target_os = "windows", not(feature = "interception_driver")))]
-            {
-                if !self.mouse_axis_map.lock().maps_movement()
-                    && cfg.options.mouse_axis_map.maps_movement()
-                {
-                    log::warn!(
-                        "mouse movement axis mapping needs the mouse hook: if no mouse keys \
-                         or axis mappings were configured at startup, restart kanata to pick \
-                         the mapping up"
-                    );
-                }
             }
 
             *self.mouse_movement_key.lock() = cfg.options.mouse_movement_key;
-            *self.mouse_axis_map.lock() = cfg.options.mouse_axis_map;
-            warn_unsupported_mouse_axis_map(&cfg.options.mouse_axis_map);
 
             // Refresh the mouse-button-output flag so the reload install gate
             // (below) sees whether the new config emits mouse buttons. The tap

@@ -2364,24 +2364,13 @@ fn parse_mouse_axis_map_rotation() {
 ";
     let icfg = parse_cfg(source).expect("parses");
     use crate::mouse_axis::*;
-    assert_eq!(
-        icfg.options.mouse_axis_map,
-        MouseAxisMap {
-            movement_x: MovementSource {
-                axis: MovementAxis::Y,
-                invert: false
-            },
-            movement_y: MovementSource {
-                axis: MovementAxis::X,
-                invert: true
-            },
-            wheel_v: WheelSource {
-                axis: WheelAxis::V,
-                invert: true
-            },
-            wheel_h: WheelSource::H,
-        },
-    );
+    let mut expected = MouseAxisMap::default();
+    expected.rows[0] = [0.0; AXIS_COUNT];
+    expected.rows[0][1] = 1.0;
+    expected.rows[1] = [0.0; AXIS_COUNT];
+    expected.rows[1][0] = -1.0;
+    expected.rows[2][2] = -1.0;
+    assert_eq!(icfg.options.mouse_axis_map, expected);
     assert!(icfg.options.mouse_axis_map.maps_movement());
     assert!(icfg.options.mouse_axis_map.maps_wheel());
 }
@@ -2400,9 +2389,9 @@ fn parse_mouse_axis_map_defaults_to_identity() {
 #[test]
 fn parse_mouse_axis_map_rejects_bad_values() {
     for (label, bad) in [
-        ("mouse-x-map", "z"),
-        ("mouse-y-map", "-v"),
-        ("mouse-wheel-v-map", "x"),
+        ("mouse-x-map", "bogus"),
+        ("mouse-y-map", "--v"),
+        ("mouse-wheel-v-map", "wheel3"),
         ("mouse-wheel-h-map", "up"),
     ] {
         let source = format!(
@@ -2420,9 +2409,7 @@ fn parse_mouse_axis_map_rejects_bad_values() {
 }
 
 #[test]
-fn parse_mouse_axis_map_rejects_non_permutation_wheels() {
-    // Both wheel outputs drawing from the same input axis cannot be
-    // expressed as single wheel key codes.
+fn parse_mouse_axis_map_allows_wheel_fanout() {
     let source = "
 (defcfg
   mouse-wheel-v-map h
@@ -2431,14 +2418,14 @@ fn parse_mouse_axis_map_rejects_non_permutation_wheels() {
 (defsrc)
 (deflayer base)
 ";
-    let res = parse_cfg(source);
-    assert!(res.is_err());
+    let cfg = parse_cfg(source).expect("one wheel can feed two outputs");
+    assert_eq!(cfg.options.mouse_axis_map.rows[2][3], 1.0);
+    assert_eq!(cfg.options.mouse_axis_map.rows[3][3], -1.0);
 }
 
 #[test]
 fn parse_mouse_axis_map_allows_same_axis_movement_sources() {
-    // Movement may draw both outputs from one input axis (discarding the
-    // other); only wheels must stay permutations.
+    // Both output axes can draw from one input.
     let source = "
 (defcfg
   mouse-x-map -x
@@ -2450,6 +2437,76 @@ fn parse_mouse_axis_map_allows_same_axis_movement_sources() {
     let icfg = parse_cfg(source).expect("parses");
     assert!(icfg.options.mouse_axis_map.maps_movement());
     assert!(!icfg.options.mouse_axis_map.maps_wheel());
+}
+
+#[test]
+fn parse_mouse_axis_wheel_swap_is_order_independent() {
+    for options in [
+        "mouse-wheel-v-map h mouse-wheel-h-map -v",
+        "mouse-wheel-h-map -v mouse-wheel-v-map h",
+    ] {
+        let cfg = parse_cfg(&format!("(defcfg {options}) (defsrc) (deflayer base)"))
+            .expect("validate the complete mapping, not intermediate defaults");
+        assert_eq!(cfg.options.mouse_axis_map.rows[2][3], 1.0);
+        assert_eq!(cfg.options.mouse_axis_map.rows[3][2], -1.0);
+    }
+}
+
+#[test]
+fn parse_mouse_axis_rows_mix_pointer_and_wheels() {
+    let cfg = parse_cfg(
+        "(defcfg mouse-axis-map (
+        (x (x 1) (h 0.25)) (y (y 1) (v -0.25)) (v) (h)
+    )) (defsrc) (deflayer base)",
+    )
+    .expect("two wheels drive the pointer");
+    let map = cfg.options.mouse_axis_map;
+    assert_eq!(&map.rows[0][..4], &[1.0, 0.0, 0.0, 0.25]);
+    assert_eq!(&map.rows[1][..4], &[0.0, 1.0, -0.25, 0.0]);
+    assert_eq!(&map.rows[2][..4], &[0.0; 4]);
+    assert_eq!(&map.rows[3][..4], &[0.0; 4]);
+}
+
+#[test]
+fn parse_mouse_axis_rows_reject_ambiguous_and_invalid_declarations() {
+    for options in [
+        "mouse-axis-map x",
+        "mouse-axis-map (())",
+        "mouse-axis-map ((x) (x (y 1)))",
+        "mouse-axis-map ((x (y 1) (y 2)))",
+        "mouse-axis-map ((wheel3 (x 1)))",
+        "mouse-axis-map ((x (wheel3 1)))",
+        "mouse-axis-map ((x (y)))",
+        "mouse-axis-map ((x (y 1 2)))",
+        "mouse-axis-map ((x (y NaN)))",
+        "mouse-axis-map ((x (y inf)))",
+        "mouse-axis-map ((x (y 1e999)))",
+        "mouse-axis-map ((x (y 1))) mouse-x-map y",
+        "mouse-x-map y mouse-axis-map ((x (y 1)))",
+    ] {
+        assert!(
+            parse_cfg(&format!("(defcfg {options}) (defsrc) (deflayer base)")).is_err(),
+            "{options}"
+        );
+    }
+}
+
+#[test]
+fn parse_extended_mouse_axes_respects_backend_capabilities() {
+    let result = parse_cfg(
+        "(defcfg mouse-axis-map (
+        (x (z 1) (dial 2)) (z (rx -1)) (rz (misc 0.5))
+    )) (defsrc) (deflayer base)",
+    );
+    if cfg!(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "unknown"
+    )) {
+        assert!(result.is_ok());
+    } else {
+        assert!(result.is_err());
+    }
 }
 
 /// Regression guard for the hwid length fencepost in `sexpr_to_hwids_vec`.

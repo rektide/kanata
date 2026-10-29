@@ -956,16 +956,20 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                         }
                     }
                     "mouse-x-map" => {
-                        cfg.mouse_axis_map.rows[MouseAxis::X as usize] = parse_axis_source(val, label)?;
+                        cfg.mouse_axis_map.rows[MouseAxis::X as usize] =
+                            parse_axis_source(val, label)?;
                     }
                     "mouse-y-map" => {
-                        cfg.mouse_axis_map.rows[MouseAxis::Y as usize] = parse_axis_source(val, label)?;
+                        cfg.mouse_axis_map.rows[MouseAxis::Y as usize] =
+                            parse_axis_source(val, label)?;
                     }
                     "mouse-wheel-v-map" => {
-                        cfg.mouse_axis_map.rows[MouseAxis::V as usize] = parse_axis_source(val, label)?;
+                        cfg.mouse_axis_map.rows[MouseAxis::V as usize] =
+                            parse_axis_source(val, label)?;
                     }
                     "mouse-wheel-h-map" => {
-                        cfg.mouse_axis_map.rows[MouseAxis::H as usize] = parse_axis_source(val, label)?;
+                        cfg.mouse_axis_map.rows[MouseAxis::H as usize] =
+                            parse_axis_source(val, label)?;
                     }
                     "mouse-axis-map" => {
                         cfg.mouse_axis_map = parse_axis_map(val)?;
@@ -973,10 +977,19 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                     _ => bail_expr!(key, "Unknown defcfg option {}", label),
                 };
                 if seen_keys.contains("mouse-axis-map")
-                    && ["mouse-x-map", "mouse-y-map", "mouse-wheel-v-map", "mouse-wheel-h-map"]
-                        .iter().any(|key| seen_keys.contains(key))
+                    && [
+                        "mouse-x-map",
+                        "mouse-y-map",
+                        "mouse-wheel-v-map",
+                        "mouse-wheel-h-map",
+                    ]
+                    .iter()
+                    .any(|key| seen_keys.contains(key))
                 {
-                    bail_expr!(key, "mouse-axis-map cannot be combined with per-axis mouse-*-map options");
+                    bail_expr!(
+                        key,
+                        "mouse-axis-map cannot be combined with per-axis mouse-*-map options"
+                    );
                 }
             }
             SExpr::List(_) => {
@@ -1000,20 +1013,31 @@ fn parse_axis_source(val: &SExpr, label: &str) -> Result<AxisRow> {
     } else {
         (text.strip_prefix('+').unwrap_or(&text), 1.0)
     };
-    let axis = MouseAxis::parse(source)
-        .ok_or_else(|| anyhow_expr!(val, "{label} expects x, y, v or h, optionally prefixed by -"))?;
+    let axis = MouseAxis::parse(source).ok_or_else(|| {
+        anyhow_expr!(
+            val,
+            "{label} expects a mouse axis name, optionally prefixed by -"
+        )
+    })?;
+    validate_axis_support(val, axis)?;
     let mut row = [0.0; AXIS_COUNT];
     row[axis as usize] = gain;
     Ok(row)
 }
 
 fn parse_axis_map(val: &SExpr) -> Result<MouseAxisMap> {
-    let rows = val.list(None)
-        .ok_or_else(|| anyhow_expr!(val, "mouse-axis-map expects a list of (output (input gain) ...) rows"))?;
+    let rows = val.list(None).ok_or_else(|| {
+        anyhow_expr!(
+            val,
+            "mouse-axis-map expects a list of (output (input gain) ...) rows"
+        )
+    })?;
     let mut map = MouseAxisMap::default();
     let mut outputs = [false; AXIS_COUNT];
     for row_expr in rows {
-        let row = row_expr.list(None).filter(|row| !row.is_empty())
+        let row = row_expr
+            .list(None)
+            .filter(|row| !row.is_empty())
             .ok_or_else(|| anyhow_expr!(row_expr, "expected (output (input gain) ...)"))?;
         let output = parse_axis_name(&row[0])? as usize;
         if outputs[output] {
@@ -1023,15 +1047,19 @@ fn parse_axis_map(val: &SExpr) -> Result<MouseAxisMap> {
         map.rows[output] = [0.0; AXIS_COUNT];
         let mut inputs = [false; AXIS_COUNT];
         for term in &row[1..] {
-            let pair = term.list(None).filter(|pair| pair.len() == 2)
+            let pair = term
+                .list(None)
+                .filter(|pair| pair.len() == 2)
                 .ok_or_else(|| anyhow_expr!(term, "expected (input gain)"))?;
             let input = parse_axis_name(&pair[0])? as usize;
             if inputs[input] {
                 bail_expr!(&pair[0], "duplicate input axis in mouse output row");
             }
             inputs[input] = true;
-            let gain = sexpr_to_str_or_err(&pair[1], "axis gain")?.parse::<f64>()
-                .ok().filter(|gain| gain.is_finite())
+            let gain = sexpr_to_str_or_err(&pair[1], "axis gain")?
+                .parse::<f64>()
+                .ok()
+                .filter(|gain| gain.is_finite())
                 .ok_or_else(|| anyhow_expr!(&pair[1], "axis gain must be a finite number"))?;
             map.rows[output][input] = gain;
         }
@@ -1040,8 +1068,25 @@ fn parse_axis_map(val: &SExpr) -> Result<MouseAxisMap> {
 }
 
 fn parse_axis_name(val: &SExpr) -> Result<MouseAxis> {
-    MouseAxis::parse(sexpr_to_str_or_err(val, "axis")?)
-        .ok_or_else(|| anyhow_expr!(val, "expected mouse axis x, y, v or h"))
+    let axis = MouseAxis::parse(sexpr_to_str_or_err(val, "axis")?).ok_or_else(|| {
+        anyhow_expr!(
+            val,
+            "expected mouse axis x, y, z, rx, ry, rz, v, h, dial or misc"
+        )
+    })?;
+    validate_axis_support(val, axis)?;
+    Ok(axis)
+}
+
+fn validate_axis_support(val: &SExpr, axis: MouseAxis) -> Result<()> {
+    if !axis.supported() {
+        bail_expr!(
+            val,
+            "mouse axis {} is supported only by the Linux/Android backend",
+            axis.name()
+        );
+    }
+    Ok(())
 }
 
 pub const FALSE_VALUES: [&str; 3] = ["no", "false", "0"];

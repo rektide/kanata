@@ -12,18 +12,18 @@ type MHookFn = dyn FnMut(MouseEventType) -> bool;
 thread_local! {
     /// Stores the hook callback for the current thread.
     static MHOOK: Cell<Option<Box<MHookFn>>> = Cell::default();
-    /// Cursor positions of the two most recent `WM_MOUSEMOVE` hook events
-    /// (most recent last), including injected ones. Injected moves skip the
-    /// hook callback but still move the cursor, so the tracking lives here
-    /// in `mhook_proc`; the axis-remapping callback uses the stored
-    /// pre-event position to compute movement deltas.
-    static MOUSE_MOVE_POSITIONS: Cell<(Option<Point>, Option<Point>)> = Cell::default();
 }
 
-/// The cursor position observed before the most recent `WM_MOUSEMOVE` hook
-/// event, or `None` until two moves have been observed on this thread.
-pub fn previous_mouse_move_point() -> Option<Point> {
-    MOUSE_MOVE_POSITIONS.with(|positions| positions.get().0)
+/// Position before Windows applies the pending hook event. A suppressed event
+/// must not become the next movement's origin; queued injected moves may also
+/// interleave with physical events, so consecutive hook positions aren't deltas.
+pub fn current_mouse_point() -> Option<Point> {
+    let mut point = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut point) } == 0 {
+        None
+    } else {
+        Some(point.into())
+    }
 }
 
 /// Wrapper for the low-level keyboard hook API.
@@ -61,21 +61,12 @@ impl Drop for MouseHook {
 }
 
 unsafe extern "system" fn mhook_proc(code: c_int, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code < 0 {
+        return unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) };
+    }
     let mouse_lparam = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
     let is_injected = mouse_lparam.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) != 0;
     log::trace!("{code} {wparam} {is_injected}");
-
-    // Track movement positions for every move event, injected included: the
-    // axis-remapping callback computes deltas against the previous position,
-    // and re-injected (or third-party injected) moves must advance the
-    // tracking too or later deltas would jump.
-    if (wparam as u32) == WM_MOUSEMOVE {
-        let point = Point::from(mouse_lparam.pt);
-        MOUSE_MOVE_POSITIONS.with(|positions| {
-            let (_, current) = positions.get();
-            positions.set((current, Some(point)));
-        });
-    }
 
     // Regarding is_injected check:
     // `SendInput()` internally calls the hook function.
@@ -148,6 +139,9 @@ pub enum MouseWheelDirection {
 pub struct MouseWheelEvent {
     pub wheel: MouseWheel,
     pub direction: Option<MouseWheelDirection>,
+    /// Signed native wheel delta; 120 is one notch. Keep partial and multiple
+    /// notches intact through axis mapping.
+    pub delta: i16,
 }
 
 /// Point in per-monitor aware coordinates, see
@@ -276,6 +270,11 @@ impl MouseWheelEvent {
         MouseWheelEvent {
             wheel: MouseWheel::new(wm_mouse_param),
             direction: unsafe { MouseWheelDirection::optionally_from(ms_ll_hook_struct) },
+            delta: if ms_ll_hook_struct.is_null() {
+                0
+            } else {
+                GET_WHEEL_DELTA_WPARAM(unsafe { (*ms_ll_hook_struct).mouseData } as WPARAM)
+            },
         }
     }
 }
@@ -419,7 +418,9 @@ impl TryFrom<MouseEventType> for KeyEvent {
                 };
                 Ok(KeyEvent::new(code, value))
             }
-            Wheel(MouseWheelEvent { wheel, direction }) => {
+            Wheel(MouseWheelEvent {
+                wheel, direction, ..
+            }) => {
                 use MouseWheel::*;
                 use MouseWheelDirection::*;
                 let Some(direction) = direction else {
