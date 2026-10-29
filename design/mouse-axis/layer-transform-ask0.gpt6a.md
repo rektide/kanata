@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human requests layer-controlled speed and mapping, preserves animation as a future desire, and commissions Astra high to design null inheritance plus set/add/multiply freedoms
+    title: Human commissions Astra high to design layer-controlled transforms with sparse per-element null/omitted edits and set/add/multiply operations, while preserving animation as a deferred desire
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -62,7 +62,7 @@ Desired layer operations, with spelling still open:
 
 | Operation | Intended question |
 | --- | --- |
-| Omitted / null | Can this field transparently inherit the next applicable value? |
+| Omitted / null | Leave this particular entry untouched; a layer need not affect or specify every mapping element. |
 | Absolute / set | Can this layer choose a value independent of lower layers? |
 | Multiply inherited | Can this layer scale whatever value it inherits? |
 | Add to inherited | Can this layer offset an inherited parameter by a chosen amount? |
@@ -71,6 +71,13 @@ Null should remain distinct from numeric zero, an identity transform, and an
 empty output row. In the existing global mapping, an omitted row is identity
 and an empty row suppresses its output. New layer semantics need their own
 explicit inheritance contract, rather than accidentally reusing those meanings.
+
+**Human clarification:** by null, the user means sparse **per-element** edits:
+“not have to affect every single element in the mapping.” A layer must be able
+to adjust one coefficient or gain while all omitted/null entries keep the values
+they would otherwise inherit. Null is a no-op at that entry, not a request to
+zero an entry, reset it to identity, or replace an entire row/profile. The design
+must support this granularity even if it also offers convenient row/group edits.
 
 Addition here concerns a **parameter** (gain or coefficient), not automatic
 constant pointer movement when input is zero. The design should state this
