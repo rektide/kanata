@@ -240,11 +240,32 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
     let mut cfg = CfgOptions::default();
     let mut exprs = check_first_expr(expr.iter(), "defcfg")?;
     let mut is_process_unmapped_keys_defined = false;
+    let mut axis_map_expr = None;
+    let mut axis_mode_expr = None;
     // Read k-v pairs from the configuration
     loop {
         let key = match exprs.next() {
             Some(k) => k,
             None => {
+                // Defer matrix parsing until its mode is known, independent
+                // of the order of options in defcfg.
+                if let Some(expr) = axis_map_expr {
+                    cfg.mouse_axis_map = parse_axis_map(expr, cfg.mouse_axis_map.mode)?;
+                } else if cfg.mouse_axis_map.mode == MouseAxisMapMode::Directional
+                    && [
+                        "mouse-x-map",
+                        "mouse-y-map",
+                        "mouse-wheel-v-map",
+                        "mouse-wheel-h-map",
+                    ]
+                    .iter()
+                    .any(|key| seen_keys.contains(key))
+                {
+                    bail_expr!(
+                        axis_mode_expr.expect("mode was configured"),
+                        "directional mode requires mouse-axis-map rows, not per-axis shorthand"
+                    );
+                }
                 if !is_process_unmapped_keys_defined {
                     log::warn!(
                         "The item process-unmapped-keys is not defined in defcfg. Consider whether process-unmapped-keys should be yes vs. no."
@@ -972,7 +993,17 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                             parse_axis_source(val, label)?;
                     }
                     "mouse-axis-map" => {
-                        cfg.mouse_axis_map = parse_axis_map(val)?;
+                        axis_map_expr = Some(val);
+                    }
+                    "mouse-axis-map-mode" => {
+                        cfg.mouse_axis_map.mode = match sexpr_to_str_or_err(val, label)? {
+                            "linear" => MouseAxisMapMode::Linear,
+                            "directional" => MouseAxisMapMode::Directional,
+                            _ => {
+                                bail_expr!(val, "mouse-axis-map-mode expects linear or directional")
+                            }
+                        };
+                        axis_mode_expr = Some(val);
                     }
                     _ => bail_expr!(key, "Unknown defcfg option {}", label),
                 };
@@ -1025,14 +1056,17 @@ fn parse_axis_source(val: &SExpr, label: &str) -> Result<AxisRow> {
     Ok(row)
 }
 
-fn parse_axis_map(val: &SExpr) -> Result<MouseAxisMap> {
+fn parse_axis_map(val: &SExpr, mode: MouseAxisMapMode) -> Result<MouseAxisMap> {
     let rows = val.list(None).ok_or_else(|| {
         anyhow_expr!(
             val,
             "mouse-axis-map expects a list of (output (input gain) ...) rows"
         )
     })?;
-    let mut map = MouseAxisMap::default();
+    let mut map = MouseAxisMap {
+        mode,
+        ..Default::default()
+    };
     let mut outputs = [false; AXIS_COUNT];
     for row_expr in rows {
         let row = row_expr
@@ -1045,23 +1079,47 @@ fn parse_axis_map(val: &SExpr) -> Result<MouseAxisMap> {
         }
         outputs[output] = true;
         map.rows[output] = [0.0; AXIS_COUNT];
-        let mut inputs = [false; AXIS_COUNT];
+        map.negative_rows[output] = [0.0; AXIS_COUNT];
+        let mut inputs = [[false; AXIS_COUNT]; 2];
         for term in &row[1..] {
             let pair = term
                 .list(None)
                 .filter(|pair| pair.len() == 2)
                 .ok_or_else(|| anyhow_expr!(term, "expected (input gain)"))?;
-            let input = parse_axis_name(&pair[0])? as usize;
-            if inputs[input] {
+            let (input, negative) = if mode == MouseAxisMapMode::Directional {
+                let name = sexpr_to_str_or_err(&pair[0], "directional input")?;
+                let (name, negative) = if let Some(name) = name.strip_suffix('+') {
+                    (name, false)
+                } else if let Some(name) = name.strip_suffix('-') {
+                    (name, true)
+                } else {
+                    bail_expr!(
+                        &pair[0],
+                        "directional inputs require a + or - suffix, e.g. v+ or y-"
+                    );
+                };
+                let axis = MouseAxis::parse(name)
+                    .ok_or_else(|| anyhow_expr!(&pair[0], "unknown directional input axis"))?;
+                validate_axis_support(&pair[0], axis)?;
+                (axis as usize, negative)
+            } else {
+                (parse_axis_name(&pair[0])? as usize, false)
+            };
+            let branch = usize::from(negative);
+            if inputs[branch][input] {
                 bail_expr!(&pair[0], "duplicate input axis in mouse output row");
             }
-            inputs[input] = true;
+            inputs[branch][input] = true;
             let gain = sexpr_to_str_or_err(&pair[1], "axis gain")?
                 .parse::<f64>()
                 .ok()
                 .filter(|gain| gain.is_finite())
                 .ok_or_else(|| anyhow_expr!(&pair[1], "axis gain must be a finite number"))?;
-            map.rows[output][input] = gain;
+            if negative {
+                map.negative_rows[output][input] = gain;
+            } else {
+                map.rows[output][input] = gain;
+            }
         }
     }
     Ok(map)

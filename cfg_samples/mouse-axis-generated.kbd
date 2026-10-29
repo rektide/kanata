@@ -1,0 +1,26 @@
+#|
+Linux/Android: create native output channels absent from an ordinary mouse.
+The physical device only needs vertical/horizontal wheel input.
+
+- Main wheel generates REL_Z; thumb wheel generates REL_RZ.
+- Both also contribute to REL_DIAL (one input may feed multiple outputs).
+- One notch generates 30 counts on each selected output.
+- X/Y pointer movement is passed through; ordinary scrolling is suppressed.
+
+A direct-input consumer must understand these extra output channels. They do
+not turn the desktop cursor into a 3D cursor. This example demonstrates output
+capabilities independent of the physical input device's advertised axes.
+|#
+
+(defcfg
+  process-unmapped-keys no
+  mouse-axis-map (
+    (z (v 0.25))
+    (rz (h 0.25))
+    (dial (v 0.25) (h 0.25))
+    (v)
+    (h)
+  )
+)
+(defsrc)
+(deflayer base)

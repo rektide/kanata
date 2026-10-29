@@ -432,4 +432,36 @@ mod axis_tests {
         )
         .unwrap();
     }
+
+    #[test]
+    fn directional_wheel_up_moves_pointer_and_down_remains_scroll() {
+        use kanata_parser::mouse_axis::MouseAxisMapMode;
+        let mut map = MouseAxisMap {
+            mode: MouseAxisMapMode::Directional,
+            ..Default::default()
+        };
+        map.rows[MouseAxis::X as usize][MouseAxis::V as usize] = 0.25;
+        map.rows[MouseAxis::V as usize] = [0.0; AXIS_COUNT];
+        let mut state = AxisState::default();
+        let up = map_axis_report(
+            &mut state,
+            map,
+            &[rel(RelativeAxisCode::REL_WHEEL_HI_RES, 120)],
+            |_| false,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(value(&up, RelativeAxisCode::REL_X), 30);
+        assert_eq!(value(&up, RelativeAxisCode::REL_WHEEL_HI_RES), 0);
+        let down = map_axis_report(
+            &mut state,
+            map,
+            &[rel(RelativeAxisCode::REL_WHEEL_HI_RES, -120)],
+            |_| false,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(value(&down, RelativeAxisCode::REL_X), 0);
+        assert_eq!(value(&down, RelativeAxisCode::REL_WHEEL_HI_RES), -120);
+    }
 }

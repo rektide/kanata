@@ -1,4 +1,4 @@
-//! Linear mapping of relative pointer and wheel deltas.
+//! Relative-axis mapping, linear by default with optional independent directions.
 //!
 //! Rows name outputs, columns name inputs. A mapping can use any subset on either
 //! side: it need not be a permutation or have equal input/output counts. The
@@ -26,6 +26,16 @@ pub enum MouseAxis {
 pub const AXIS_COUNT: usize = MouseAxis::ALL.len();
 pub type AxisValues = [i32; AXIS_COUNT];
 pub type AxisRow = [f64; AXIS_COUNT];
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum MouseAxisMapMode {
+    /// One coefficient per input; negative input reverses the output.
+    #[default]
+    Linear,
+    /// Separate positive/negative input branches, each using a positive
+    /// magnitude. The branch's coefficient chooses the output direction.
+    Directional,
+}
 
 impl MouseAxis {
     pub const ALL: [Self; 10] = [
@@ -103,6 +113,8 @@ impl MouseAxis {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct MouseAxisMap {
     pub rows: [AxisRow; AXIS_COUNT],
+    pub negative_rows: [AxisRow; AXIS_COUNT],
+    pub mode: MouseAxisMapMode,
 }
 
 impl Default for MouseAxisMap {
@@ -111,13 +123,20 @@ impl Default for MouseAxisMap {
             rows: std::array::from_fn(|output| {
                 std::array::from_fn(|input| if input == output { 1.0 } else { 0.0 })
             }),
+            negative_rows: std::array::from_fn(|output| {
+                std::array::from_fn(|input| if input == output { -1.0 } else { 0.0 })
+            }),
+            mode: MouseAxisMapMode::Linear,
         }
     }
 }
 
 impl MouseAxisMap {
     pub fn is_identity(&self) -> bool {
-        *self == Self::default()
+        let identity = Self::default();
+        self.rows == identity.rows
+            && (self.mode == MouseAxisMapMode::Linear
+                || self.negative_rows == identity.negative_rows)
     }
 
     /// Whether this physical input needs interception (including fan-out into
@@ -126,6 +145,9 @@ impl MouseAxisMap {
         let identity = Self::default();
         (0..AXIS_COUNT).any(|output| {
             self.rows[output][input as usize] != identity.rows[output][input as usize]
+                || (self.mode == MouseAxisMapMode::Directional
+                    && self.negative_rows[output][input as usize]
+                        != identity.negative_rows[output][input as usize])
         })
     }
 
@@ -160,12 +182,20 @@ impl MouseAxisTransform {
 
     pub fn apply(&mut self, input: AxisValues) -> AxisValues {
         std::array::from_fn(|output| {
-            let total = self.map.rows[output]
-                .iter()
-                .zip(input)
-                .fold(self.remainder[output], |sum, (gain, value)| {
-                    sum + gain * f64::from(value)
-                });
+            let total =
+                input
+                    .iter()
+                    .enumerate()
+                    .fold(self.remainder[output], |sum, (axis, &value)| {
+                        let contribution = if self.map.mode == MouseAxisMapMode::Directional
+                            && value < 0
+                        {
+                            self.map.negative_rows[output][axis] * f64::from(value.unsigned_abs())
+                        } else {
+                            self.map.rows[output][axis] * f64::from(value)
+                        };
+                        sum + contribution
+                    });
             // Saturate rather than wrap; don't retain an unrepresentable
             // backlog. NaN is only possible from extreme finite coefficients
             // whose overflowing products have opposite signs.
@@ -289,5 +319,41 @@ mod tests {
         assert_eq!(output[MouseAxis::X as usize], 4);
         assert_eq!(output[MouseAxis::Rz as usize], 60);
         assert_eq!(output[MouseAxis::Z as usize], 3); // omitted row passes through
+    }
+
+    #[test]
+    fn directional_mode_separates_pointer_and_wheel_polarities() {
+        let mut transform = MouseAxisTransform::default();
+        transform.map.mode = MouseAxisMapMode::Directional;
+        // Positive V -> right; negative V -> down, with a different gain.
+        transform.map.rows[MouseAxis::X as usize][MouseAxis::V as usize] = 0.25;
+        transform.map.negative_rows[MouseAxis::Y as usize][MouseAxis::V as usize] = 0.5;
+        transform.map.rows[MouseAxis::V as usize] = [0.0; AXIS_COUNT];
+        transform.map.negative_rows[MouseAxis::V as usize] = [0.0; AXIS_COUNT];
+        assert_eq!(transform.apply(values(0, 0, 120, 0)), values(30, 0, 0, 0));
+        assert_eq!(transform.apply(values(0, 0, -120, 0)), values(0, 60, 0, 0));
+        // An omitted pointer row still has normal negative-input behavior.
+        assert_eq!(transform.apply(values(-3, -4, 0, 0)), values(-3, -4, 0, 0));
+    }
+
+    #[test]
+    fn directional_default_is_identity_and_negative_only_changes_need_capture() {
+        let mut map = MouseAxisMap {
+            mode: MouseAxisMapMode::Directional,
+            ..Default::default()
+        };
+        assert!(map.is_identity());
+        assert!(!map.maps_movement());
+        map.negative_rows[MouseAxis::V as usize][MouseAxis::Y as usize] = 1.0;
+        assert!(map.maps_movement());
+        assert!(!map.is_identity());
+    }
+
+    #[test]
+    fn directional_negative_minimum_has_positive_magnitude_without_overflow() {
+        let mut transform = MouseAxisTransform::default();
+        transform.map.mode = MouseAxisMapMode::Directional;
+        transform.map.negative_rows[0][0] = 0.5;
+        assert_eq!(transform.apply(values(i32::MIN, 0, 0, 0))[0], 1 << 30);
     }
 }

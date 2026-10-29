@@ -5274,7 +5274,54 @@ Complete configs to start from:
 - `cfg_samples/mouse-axis-dual-wheel.kbd`: independent two-wheel mapping.
 - `cfg_samples/mouse-axis-wheel-pointer.kbd`: both wheels control the pointer.
 - `cfg_samples/mouse-axis-extended.kbd`: Linux Z, rotational and dial channels.
+- `cfg_samples/mouse-axis-generated.kbd`: generate Z/RZ/dial from ordinary wheels.
 - `cfg_samples/mouse-axis-remap.kbd`: simple quarter-turn shorthand.
+- `cfg_samples/mouse-axis-directional.kbd`: different destinations for opposite directions.
+
+==== Optional advanced mode: independent directions
+
+`mouse-axis-map-mode` defaults to `linear`: negative input naturally reverses
+the same mapping. Set it to `directional` to configure positive and negative
+input independently. This is a piecewise-linear mapping, not a single matrix.
+
+In directional mode, input names require a `+` or `-` suffix:
+
+- `x+` / `x-`: pointer right / left.
+- `y+` / `y-`: pointer down / up.
+- `v+` / `v-`: wheel up / down.
+- `h+` / `h-`: wheel right / left.
+- Linux's extra relative axes use the same suffixes, such as `z+`, `rz-`, `dial+`.
+
+The selected input branch supplies a *positive magnitude*. Its coefficient
+sets the output sign. For example, `(v (v+ 1) (v- -0.25))` scrolls upward at
+normal speed and downward at quarter speed. Output names have no suffix.
+
+.Wheel up moves the pointer right; wheel down still scrolls down
+[source]
+----
+(defcfg
+  mouse-axis-map-mode directional
+  mouse-axis-map (
+    (x (x+ 1) (x- -1) (v+ 0.25))
+    (v (v- -1))
+  )
+)
+----
+
+Normal X movement is explicitly retained in both directions in the `x` row.
+The `v` row has only its downward branch, so upward wheel movement produces
+no vertical scroll. Omitted output rows keep normal passthrough in *both*
+directions; omitted branches in a configured row contribute nothing. Pointer
+directions can likewise have independent gains or destinations. See the complete
+`mouse-axis-directional.kbd` example.
+
+The mode option may appear before or after the rows. Directional mode uses
+`mouse-axis-map` rows rather than per-output shorthand. Linear mode rejects
+direction-suffixed input names, keeping the advanced behavior explicitly opt-in.
+Direction selection uses each input axis's net delta in a native report, before
+mixing different axes into outputs. Fractional state is shared per output, so
+opposing output contributions can cancel. It does not reconstruct reversals
+that the input device has already combined into one report delta.
 
 ==== Processing and platform support
 
@@ -5320,6 +5367,9 @@ This rotates pointer movement and swaps/inverts the wheels. Wheel sources do
 not have to be permutations: duplication and mixing are supported by the
 analog pipeline. Use an empty matrix row to discard an output without
 duplicating another channel.
+
+For prospective Linux device-qualified routing and multiple virtual outputs,
+see link:../design/mouse-axis/linux-flexibility0.gpt6a.md[the Linux flexibility design].
 
 [[linux-only-linux-dev]]
 === Linux only: linux-dev

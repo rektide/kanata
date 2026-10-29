@@ -1,0 +1,28 @@
+#|
+Advanced, explicitly enabled direction-sensitive mapping.
+
+Input suffixes choose a branch: x+ right, x- left, y+ down, y- up,
+v+ wheel up, v- wheel down, h+ wheel right, h- wheel left.
+Each branch contributes a POSITIVE magnitude; its gain sets output direction.
+
+- Pointer up moves right instead; pointer down still moves down.
+- Wheel up moves right by 30 pointer units per notch.
+- Wheel down still scrolls down. Horizontal scrolling stays native.
+- Normal horizontal pointer motion works in both directions.
+
+Unlisted OUTPUT rows keep identity in both directions. Within an explicitly
+listed row, unlisted input branches contribute nothing.
+The default mode is linear; this mode must be explicitly requested.
+|#
+
+(defcfg
+  process-unmapped-keys no
+  mouse-axis-map-mode directional
+  mouse-axis-map (
+    (x (x+ 1) (x- -1) (y- 1) (v+ 0.25))
+    (y (y+ 1))
+    (v (v- -1))
+  )
+)
+(defsrc)
+(deflayer base)

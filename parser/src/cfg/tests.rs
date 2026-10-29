@@ -2509,6 +2509,54 @@ fn parse_extended_mouse_axes_respects_backend_capabilities() {
     }
 }
 
+#[test]
+fn parse_directional_mouse_map_is_explicit_and_order_independent() {
+    use crate::mouse_axis::{AXIS_COUNT, MouseAxis, MouseAxisMapMode, MouseAxisTransform};
+    let rows = "mouse-axis-map ((x (x+ 1) (x- -1) (v+ 0.25)) (v (v- -0.5)))";
+    for options in [
+        format!("mouse-axis-map-mode directional {rows}"),
+        format!("{rows} mouse-axis-map-mode directional"),
+    ] {
+        let cfg = parse_cfg(&format!("(defcfg {options}) (defsrc) (deflayer base)"))
+            .expect("independent directions");
+        assert_eq!(
+            cfg.options.mouse_axis_map.mode,
+            MouseAxisMapMode::Directional
+        );
+        let mut transform = MouseAxisTransform {
+            map: cfg.options.mouse_axis_map,
+            ..Default::default()
+        };
+        let mut input = [0; AXIS_COUNT];
+        input[MouseAxis::V as usize] = 120;
+        let output = transform.apply(input);
+        assert_eq!(output[MouseAxis::X as usize], 30);
+        assert_eq!(output[MouseAxis::V as usize], 0);
+        input[MouseAxis::V as usize] = -120;
+        let output = transform.apply(input);
+        assert_eq!(output[MouseAxis::X as usize], 0);
+        assert_eq!(output[MouseAxis::V as usize], -60);
+    }
+}
+
+#[test]
+fn parse_directional_mouse_map_rejects_implicit_or_duplicate_branches() {
+    for options in [
+        "mouse-axis-map ((x (v+ 1)))", // linear is the default
+        "mouse-axis-map-mode other",
+        "mouse-axis-map-mode directional mouse-axis-map ((x (v 1)))",
+        "mouse-axis-map-mode directional mouse-axis-map ((x+ (v+ 1)))",
+        "mouse-axis-map-mode directional mouse-axis-map ((x (v+ 1) (v+ 2)))",
+        "mouse-axis-map-mode directional mouse-axis-map ((x (v- 1) (v- 2)))",
+        "mouse-axis-map-mode directional mouse-x-map y",
+    ] {
+        assert!(
+            parse_cfg(&format!("(defcfg {options}) (defsrc) (deflayer base)")).is_err(),
+            "{options}"
+        );
+    }
+}
+
 /// Regression guard for the hwid length fencepost in `sexpr_to_hwids_vec`.
 ///
 /// Bytes parsed from a hwid are packed into a fixed `[u8; HWID_ARR_SZ]` array.
