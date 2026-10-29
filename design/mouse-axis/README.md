@@ -8,13 +8,15 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Maintains the design reading map as the human commissions layer inheritance and preserves animation as a future desire
+    title: Records the human layer/animation direction and reviews and connects the commissioned Astra-high inheritance proposal
   - resource: /docs/config.adoc
     title: Implemented global linear and directional axis-map configuration
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
     title: Independent Linux-first endpoint and device-identity proposal
   - resource: /design/mouse-axis/layer-transform-ask0.gpt6a.md
     title: Commissioned null/set/add/multiply layer semantics and deferred animation sketch
+  - resource: /design/mouse-axis/layer-transform-design0.gpt6a.md
+    title: Astra-high proposal for sparse gain/coefficient operations, full-stack resolution and report/state boundaries
 ---
 
 # Mouse and relative-input transform design
@@ -39,6 +41,12 @@ Starting examples:
   and multiplicative parameter operations; questions about gains, matrix
   coefficients and composition. The latest direction is design first with
   Astra high.
+- [Astra-high proposal](layer-transform-design0.gpt6a.md): sparse per-element
+  operations over independent output gains and routing coefficients. Includes
+  worked activation/release cases, rotation-preserving precision layers and
+  directional edits. Its [three decision groups](layer-transform-design0.gpt6a.md#decisions-to-accept-before-implementation)
+  cover the parameter model, full active-stack precedence and runtime state
+  boundaries; these remain proposals for human selection.
 
 ## Deferred animation desire
 

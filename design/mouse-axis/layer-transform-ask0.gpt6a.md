@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human commissions Astra high to design layer-controlled transforms with sparse per-element null/omitted edits and set/add/multiply operations, while preserving animation as a deferred desire
+    title: Human commissions sparse per-element layer operations and defers animation; parent records the clarification and connects the completed Astra-high proposal
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -21,6 +21,8 @@ sources:
     title: Current layer-change detection, tick processing and global mouse-axis map publication
   - resource: /design/mouse-axis/linux-flexibility0.gpt6a.md
     title: Existing distinction between generated axes, source identity and output endpoints
+  - resource: /design/mouse-axis/layer-transform-design0.gpt6a.md
+    title: Completed independent Astra-high response to this commission, pending selection of its proposed semantics
 ---
 
 # Layer-controlled input transforms and deferred animation desire
@@ -43,6 +45,13 @@ This document preserves the ask and rough animation ideas. It does not select
 final configuration syntax or authorize implementation of layer transforms or
 animation. The corresponding proposal should distinguish recommendations from
 accepted runtime behavior.
+
+The commissioned [Astra-high response](layer-transform-design0.gpt6a.md) is now
+available. It recommends independent output gains and routing coefficients,
+sparse scalar operations, a full active-layer resolver, and explicit report and
+fractional-state boundaries. Its worked examples answer this ask; its
+[decision section](layer-transform-design0.gpt6a.md#decisions-to-accept-before-implementation)
+identifies the choices to select before implementation.
 
 ## Vocabulary and desired freedoms
 
