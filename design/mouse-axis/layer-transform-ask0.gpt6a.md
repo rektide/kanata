@@ -8,7 +8,7 @@ author: openai/gpt-6-astra#xhigh
 date: 2026-10-29
 sources:
   - resource: opencode://ses_e7b7b7559ffeEC9DfB7nsFmtYO
-    title: Human expands the layer design to cell, matrix and scalar operands with both explicitly named multiplication kinds; parent preserves this evolution and the deferred animation ask
+    title: Human requests cell/matrix/scalar forms and both multiplication kinds; parent preserves the evolving ask and reviews and connects the consolidated Astra-high response
   - resource: /parser/src/mouse_axis.rs
     title: Existing global linear and directional mappings and quantization state
   - resource: /src/kanata/mouse_axis.rs
@@ -25,6 +25,8 @@ sources:
     title: Completed independent Astra-high response to this commission, pending selection of its proposed semantics
   - resource: /design/mouse-axis/layer-transform-scope0.gpt6a.md
     title: Focused response to the blanket-operation request, recommending cell replacement and explicit null exclusions
+  - resource: /design/mouse-axis/layer-transform-design1.gpt6a.md
+    title: Consolidated response proposing ordered edit operands, numeric composition factors and a single-map layer program
 ---
 
 # Layer-controlled input transforms and deferred animation desire
@@ -192,6 +194,16 @@ Important questions for the revision:
 The animation opportunity remains deferred. This is still a design-first
 commission; the revision should recommend a coherent contract and identify the
 remaining semantic decisions rather than publish new runtime syntax as existing.
+
+The [consolidated response](layer-transform-design1.gpt6a.md) is now available.
+It recommends ordered cell/matrix/scalar edits, distinct `mul-elements` and
+input/output composition operations, and one resolved coefficient map. This
+revises the earlier independent-gain and blanket-specificity recommendations:
+later edits read preceding results, null skips only the current edit, and
+composition factors require numeric values. Its
+[decision section](layer-transform-design1.gpt6a.md#decisions-before-implementation)
+identifies the single-map tradeoff and representable directional products for
+human selection before implementation.
 
 ## Questions for the layer proposal
 
