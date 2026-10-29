@@ -6,7 +6,9 @@ use std::sync::mpsc::{Receiver, RecvError, SyncSender as Sender, TryRecvError, s
 use std::time;
 
 use super::PRESSED_KEYS;
-use crate::kanata::mouse_axis::{AXIS_COUNT, AxisState, MouseAxis, WheelMask};
+use crate::kanata::mouse_axis::{
+    AXIS_COUNT, AxisState, AxisValues, MotionSnapshot, MouseAxis, WheelMask,
+};
 use crate::kanata::*;
 
 impl Kanata {
@@ -112,59 +114,22 @@ impl Kanata {
             let mousehook = MouseHook::set_input_cb(move |mouse_event| {
                 log::debug!("llhook mouse event: {mouse_event:?}");
                 let snapshot = motion_snapshot.lock().clone();
-                axis_state.observe_snapshot(&snapshot);
-                let map = snapshot.map;
-                let mut input = [0; AXIS_COUNT];
-                let is_axis_event = match mouse_event {
-                    MouseEventType::Move(MouseMoveEvent { point: Some(point) })
-                        if map.maps_movement() =>
-                    {
-                        let Some(current) = current_mouse_point() else {
-                            return false;
-                        };
-                        input[MouseAxis::X as usize] = point.x.saturating_sub(current.x);
-                        input[MouseAxis::Y as usize] = point.y.saturating_sub(current.y);
-                        true
-                    }
-                    MouseEventType::Wheel(wheel) if !map.is_identity() => {
-                        let axis = match wheel.wheel {
-                            MouseWheel::Vertical => MouseAxis::V,
-                            MouseWheel::Horizontal => MouseAxis::H,
-                            _ => return false,
-                        };
-                        input[axis as usize] = wheel.delta.into();
-                        true
-                    }
-                    _ => false,
-                };
-                let mut output = axis_state.apply(input);
-                if is_axis_event {
-                    axis_state
-                        .route_wheels(&mut output, snapshot.wheels, |code| {
-                            try_send_panic(&preprocess_tx, KeyEvent::new(code, KeyValue::Tap));
-                            Ok(())
-                        })
-                        .expect("route wheel taps");
-                    if output.iter().any(|value| *value != 0) {
-                        axis_injection_tx
-                            .send(crate::oskbd::AxisInjection { deltas: output })
-                            .expect("mouse axis output thread disconnected");
-                    }
-                    return true;
-                }
-                let key_event = match KeyEvent::try_from(mouse_event) {
-                    Ok(ev) => ev,
-                    _ => return false,
-                };
-                if !(if WheelMask::is_wheel(key_event.code) {
-                    snapshot.wheels.contains(key_event.code)
-                } else {
-                    MAPPED_KEYS.lock().contains(&key_event.code)
-                }) {
-                    return false;
-                }
-                try_send_panic(&preprocess_tx, key_event);
-                true
+                route_mouse_event(
+                    &mut axis_state,
+                    &snapshot,
+                    mouse_event,
+                    current_mouse_point,
+                    |code| MAPPED_KEYS.lock().contains(&code),
+                    |key_event| {
+                        try_send_panic(&preprocess_tx, key_event);
+                        Ok(())
+                    },
+                    |output| {
+                        axis_injection_tx.send(crate::oskbd::AxisInjection { deltas: output })?;
+                        Ok(())
+                    },
+                )
+                .expect("route mouse event")
             });
             log::info!("Installed mouse hook callback successfully.");
             Some(mousehook)
@@ -372,9 +337,282 @@ impl Kanata {
     }
 }
 
+/// Pure callback boundary: no hook, cursor query or injection is constructed here.
+/// Untouched pointer motion can pass natively, but wheel accounting must use the
+/// configuration's stable pipeline policy, not the current layer's map equality.
+fn route_mouse_event(
+    axis_state: &mut AxisState,
+    snapshot: &MotionSnapshot,
+    mouse_event: MouseEventType,
+    current_point: impl FnOnce() -> Option<Point>,
+    is_mapped: impl Fn(OsCode) -> bool,
+    mut send_key: impl FnMut(KeyEvent) -> Result<()>,
+    mut inject: impl FnMut(AxisValues) -> Result<()>,
+) -> Result<bool> {
+    axis_state.observe_snapshot(snapshot);
+    let mut input = [0; AXIS_COUNT];
+    let is_axis_event = match mouse_event {
+        MouseEventType::Move(MouseMoveEvent { point: Some(point) })
+            if snapshot.map.maps_movement() =>
+        {
+            let Some(current) = current_point() else {
+                return Ok(false);
+            };
+            input[MouseAxis::X as usize] = point.x.saturating_sub(current.x);
+            input[MouseAxis::Y as usize] = point.y.saturating_sub(current.y);
+            true
+        }
+        MouseEventType::Wheel(wheel) if snapshot.pipeline_enabled => {
+            let axis = match wheel.wheel {
+                MouseWheel::Vertical => MouseAxis::V,
+                MouseWheel::Horizontal => MouseAxis::H,
+                _ => return Ok(false),
+            };
+            input[axis as usize] = wheel.delta.into();
+            true
+        }
+        _ => false,
+    };
+    if is_axis_event {
+        let mut output = axis_state.apply(input);
+        axis_state.route_wheels(&mut output, snapshot.wheels, |code| {
+            send_key(KeyEvent::new(code, KeyValue::Tap))
+        })?;
+        if output.iter().any(|value| *value != 0) {
+            inject(output)?;
+        }
+        return Ok(true);
+    }
+    let key_event = match KeyEvent::try_from(mouse_event) {
+        Ok(ev) => ev,
+        _ => return Ok(false),
+    };
+    if !(if WheelMask::is_wheel(key_event.code) {
+        snapshot.wheels.contains(key_event.code)
+    } else {
+        is_mapped(key_event.code)
+    }) {
+        return Ok(false);
+    }
+    send_key(key_event)?;
+    Ok(true)
+}
+
 fn try_send_panic(tx: &Sender<KeyEvent>, kev: KeyEvent) {
     if let Err(e) = tx.try_send(kev) {
         panic!("failed to send on channel: {e:?}")
+    }
+}
+
+#[cfg(test)]
+mod axis_tests {
+    use super::*;
+    use crate::kanata::mouse_axis::MouseAxisMap;
+
+    fn wheel(axis: MouseAxis, delta: i16) -> MouseEventType {
+        MouseEventType::Wheel(MouseWheelEvent {
+            wheel: if axis == MouseAxis::V {
+                MouseWheel::Vertical
+            } else {
+                MouseWheel::Horizontal
+            },
+            direction: Some(if delta >= 0 {
+                MouseWheelDirection::Forward
+            } else {
+                MouseWheelDirection::Backward
+            }),
+            delta,
+        })
+    }
+
+    #[test]
+    fn native_pipeline_wheel_toggles_keep_partial_and_multiple_key_notches() {
+        for axis in MouseAxis::WHEELS {
+            for sign in [-1, 1] {
+                for first_identity in [true, false] {
+                    let mut snapshot = Arc::new(MotionSnapshot::initial(
+                        MouseAxisMap::default(),
+                        WheelMask::new(|_| true),
+                        true,
+                    ));
+                    let mut state = AxisState::default();
+                    for (index, (delta, notches)) in
+                        [(60, 0), (60, 1), (300, 2), (60, 1), (0, 0), (0, 0)]
+                            .into_iter()
+                            .enumerate()
+                    {
+                        let mut map = MouseAxisMap::default();
+                        map.rows[0][0] = if (index % 2 == 0) == first_identity {
+                            1.0
+                        } else {
+                            0.25
+                        };
+                        snapshot = snapshot.next(map, snapshot.wheels, true, false);
+                        let mut keys = vec![];
+                        assert!(
+                            route_mouse_event(
+                                &mut state,
+                                &snapshot,
+                                wheel(axis, sign * delta),
+                                || unreachable!("wheel input never queries the cursor"),
+                                |_| unreachable!("wheel mask is snapshot-owned"),
+                                |key| {
+                                    keys.push(key);
+                                    Ok(())
+                                },
+                                |_| unreachable!("mapped wheels must not leak raw output"),
+                            )
+                            .unwrap()
+                        );
+                        assert_eq!(keys.len(), notches);
+                        assert!(
+                            keys.iter()
+                                .all(|key| key.code == axis.wheel_code(sign > 0).unwrap()
+                                    && key.value == KeyValue::Tap)
+                        );
+                    }
+                    assert_eq!(state.wheel_key_remainder, [0; 2]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_pipeline_raw_wheels_keep_both_axes_and_signed_multi_notch_amounts() {
+        let mut snapshot = Arc::new(MotionSnapshot::initial(
+            MouseAxisMap::default(),
+            WheelMask::default(),
+            true,
+        ));
+        let mut state = AxisState::default();
+        for axis in MouseAxis::WHEELS {
+            for (index, delta) in [60, -60, 300, -300].into_iter().enumerate() {
+                let mut map = MouseAxisMap::default();
+                map.rows[0][0] = if index % 2 == 0 { 1.0 } else { 0.25 };
+                snapshot = snapshot.next(map, snapshot.wheels, true, false);
+                let mut injections = vec![];
+                assert!(
+                    route_mouse_event(
+                        &mut state,
+                        &snapshot,
+                        wheel(axis, delta),
+                        || unreachable!(),
+                        |_| unreachable!(),
+                        |_| unreachable!(),
+                        |output| {
+                            injections.push(output);
+                            Ok(())
+                        },
+                    )
+                    .unwrap()
+                );
+                let mut expected = [0; AXIS_COUNT];
+                expected[axis as usize] = delta.into();
+                assert_eq!(injections, [expected]);
+            }
+        }
+    }
+
+    #[test]
+    fn untouched_pointer_unknown_metadata_and_buttons_keep_native_callback_routing() {
+        let snapshot = MotionSnapshot::initial(MouseAxisMap::default(), WheelMask::default(), true);
+        let mut state = AxisState::default();
+        state.observe_snapshot(&snapshot);
+        state.wheel_key_remainder = [60; 2];
+        let reload = snapshot.next(snapshot.map, snapshot.wheels, true, true);
+        for event in [
+            MouseEventType::Move(MouseMoveEvent {
+                point: Some(Point { x: 8, y: 4 }),
+            }),
+            MouseEventType::Move(MouseMoveEvent { point: None }),
+            MouseEventType::Other(123),
+            MouseEventType::Wheel(MouseWheelEvent {
+                wheel: MouseWheel::Unknown(123),
+                direction: None,
+                delta: 60,
+            }),
+        ] {
+            assert!(
+                !route_mouse_event(
+                    &mut state,
+                    &reload,
+                    event,
+                    || unreachable!("untouched motion must pass without a cursor query"),
+                    |_| unreachable!(),
+                    |_| unreachable!(),
+                    |_| unreachable!(),
+                )
+                .unwrap()
+            );
+            assert_eq!(state.wheel_key_remainder, [0; 2]);
+        }
+        let event = MouseEventType::Press(MousePressEvent {
+            pressed: MouseButtonPress::Down,
+            button: MouseButton::Left(MouseClick::SingleClick),
+        });
+        assert!(
+            !route_mouse_event(
+                &mut state,
+                &reload,
+                event,
+                || unreachable!(),
+                |_| false,
+                |_| unreachable!(),
+                |_| unreachable!()
+            )
+            .unwrap()
+        );
+        let mut keys = vec![];
+        assert!(
+            route_mouse_event(
+                &mut state,
+                &reload,
+                event,
+                || unreachable!(),
+                |code| code == OsCode::BTN_LEFT,
+                |key| {
+                    keys.push(key);
+                    Ok(())
+                },
+                |_| unreachable!()
+            )
+            .unwrap()
+        );
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].code, OsCode::BTN_LEFT);
+        assert_eq!(keys[0].value, KeyValue::Press);
+    }
+
+    #[test]
+    fn legacy_identity_keeps_native_raw_or_sign_only_mapped_wheel_routing() {
+        for mapped in [true, false] {
+            let snapshot =
+                MotionSnapshot::initial(MouseAxisMap::default(), WheelMask::new(|_| mapped), false);
+            for delta in [60, 240] {
+                let mut keys = vec![];
+                assert_eq!(
+                    route_mouse_event(
+                        &mut AxisState::default(),
+                        &snapshot,
+                        wheel(MouseAxis::V, delta),
+                        || unreachable!(),
+                        |_| unreachable!(),
+                        |key| {
+                            keys.push(key);
+                            Ok(())
+                        },
+                        |_| unreachable!("legacy wheel passthrough is native"),
+                    )
+                    .unwrap(),
+                    mapped
+                );
+                assert_eq!(keys.len(), usize::from(mapped));
+                if mapped {
+                    assert_eq!(keys[0].code, OsCode::MouseWheelUp);
+                    assert_eq!(keys[0].value, KeyValue::Tap);
+                }
+            }
+        }
     }
 }
 

@@ -56,21 +56,10 @@ impl Kanata {
                 ev.event_type() == EventType::SYNCHRONIZATION && ev.code() == 0
             }) {
                 let snapshot = motion_snapshot.lock().clone();
-                let map = snapshot.map;
-                axis_state.observe_snapshot(&snapshot);
-                let mut transformed = if !map.is_identity() {
-                    Some(map_axis_report(
-                        &mut axis_state,
-                        &snapshot,
-                        report,
-                        |code| {
-                            tx.try_send(KeyEvent::new(code, KeyValue::Tap))?;
-                            Ok(())
-                        },
-                    )?)
-                } else {
-                    None
-                };
+                let mut axes = route_axis_report(&mut axis_state, &snapshot, report, |code| {
+                    tx.try_send(KeyEvent::new(code, KeyValue::Tap))?;
+                    Ok(())
+                })?;
                 for in_event in report.iter().copied() {
                     if let Some(ms_mvmt_key) = *mouse_movement_key.lock()
                         && let EventSummary::RelativeAxis(
@@ -85,13 +74,11 @@ impl Kanata {
                         }
                     }
 
-                    if !map.is_identity() && relative_axis(in_event).is_some() {
-                        if let Some(output) = transformed.take() {
-                            let mut kanata = kanata.lock();
-                            #[cfg(not(feature = "simulated_output"))]
-                            for event in output {
-                                kanata.kbd_out.write_raw(event)?;
-                            }
+                    if let Some(output) = axes.take_axis_output(in_event) {
+                        let mut kanata = kanata.lock();
+                        #[cfg(not(feature = "simulated_output"))]
+                        for event in output {
+                            kanata.kbd_out.write_raw(event)?;
                         }
                         continue;
                     }
@@ -237,6 +224,37 @@ fn axis_code(axis: MouseAxis) -> RelativeAxisCode {
     }
 }
 
+enum AxisReportRoute {
+    Legacy,
+    Analog(Vec<InputEvent>),
+}
+
+impl AxisReportRoute {
+    /// Replace known relative axes at their first position in the report. Other
+    /// events (including unknown relative codes) retain their native routing.
+    fn take_axis_output(&mut self, event: InputEvent) -> Option<Vec<InputEvent>> {
+        match self {
+            Self::Analog(output) if relative_axis(event).is_some() => Some(std::mem::take(output)),
+            _ => None,
+        }
+    }
+}
+
+/// The production decision between analog accounting and the legacy event path.
+fn route_axis_report(
+    state: &mut AxisState,
+    snapshot: &MotionSnapshot,
+    report: &[InputEvent],
+    tap: impl FnMut(OsCode) -> Result<()>,
+) -> Result<AxisReportRoute> {
+    state.observe_snapshot(snapshot);
+    if !snapshot.pipeline_enabled {
+        Ok(AxisReportRoute::Legacy)
+    } else {
+        map_axis_report(state, snapshot, report, tap).map(AxisReportRoute::Analog)
+    }
+}
+
 fn map_axis_report(
     state: &mut AxisState,
     snapshot: &MotionSnapshot,
@@ -378,6 +396,183 @@ mod axis_tests {
             .sum()
     }
 
+    fn routed_report(
+        state: &mut AxisState,
+        snapshot: &MotionSnapshot,
+        report: &[InputEvent],
+        taps: &mut Vec<OsCode>,
+    ) -> Vec<InputEvent> {
+        let mut route = route_axis_report(state, snapshot, report, |code| {
+            taps.push(code);
+            Ok(())
+        })
+        .unwrap();
+        report
+            .iter()
+            .flat_map(|&event| route.take_axis_output(event).unwrap_or_else(|| vec![event]))
+            .collect()
+    }
+
+    #[cfg(feature = "simulated_output")]
+    #[test]
+    fn native_wheel_credit_crosses_identity_precision_in_both_directions() {
+        let _lock = crate::tests::CFG_PARSE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for layers in [[0, 1], [1, 0]] {
+            let mut k = Kanata::new_from_str(
+                "(defsrc mwu mwr) (deflayer base a b) (deflayer (precision mouse-axis ((mul-elements (scalar 0.25 (outputs x y))))) _ _)",
+                Default::default(),
+            )
+            .unwrap();
+            let mut state = AxisState::default();
+            let mut taps = vec![];
+            for layer in layers {
+                k.layout.bm().set_default_layer(layer);
+                k.tick_ms(0, &None).unwrap();
+                let snapshot = k.motion_snapshot.lock().clone();
+                // Exercise the same routing decision as event_loop, not the
+                // unconditional mapper. Legacy mapped hi-res events emit no tap.
+                route_axis_report(
+                    &mut state,
+                    &snapshot,
+                    &[
+                        rel(RelativeAxisCode::REL_WHEEL_HI_RES, 60),
+                        rel(RelativeAxisCode::REL_HWHEEL_HI_RES, 60),
+                    ],
+                    |code| {
+                        taps.push(code);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                taps,
+                [OsCode::MouseWheelUp, OsCode::MouseWheelRight],
+                "half-notches across layers {layers:?} must make one notch per wheel"
+            );
+        }
+    }
+
+    #[test]
+    fn native_wheel_toggles_cannot_revive_key_credit_or_lose_multiple_notches() {
+        for sign in [-1, 1] {
+            let mut snapshot = Arc::new(MotionSnapshot::initial(
+                MouseAxisMap::default(),
+                WheelMask::new(|_| true),
+                true,
+            ));
+            let mut state = AxisState::default();
+            // End each pair at zero credit, then revisit both maps without new
+            // wheel input: no dormant identity-path credit may reappear.
+            for (index, (delta, notches)) in [(60, 0), (60, 1), (300, 2), (60, 1), (0, 0), (0, 0)]
+                .into_iter()
+                .enumerate()
+            {
+                let mut map = MouseAxisMap::default();
+                map.rows[0][0] = if index % 2 == 0 { 0.25 } else { 1.0 };
+                snapshot = snapshot.next(map, snapshot.wheels, true, false);
+                let mut taps = vec![];
+                let output = routed_report(
+                    &mut state,
+                    &snapshot,
+                    &[
+                        rel(RelativeAxisCode::REL_WHEEL_HI_RES, sign * delta),
+                        rel(RelativeAxisCode::REL_HWHEEL_HI_RES, sign * delta),
+                    ],
+                    &mut taps,
+                );
+                assert!(output.is_empty(), "mapped wheels must not leak raw output");
+                let expected: Vec<_> = MouseAxis::WHEELS
+                    .into_iter()
+                    .flat_map(|axis| vec![axis.wheel_code(sign > 0).unwrap(); notches])
+                    .collect();
+                assert_eq!(taps, expected, "report {index}, sign {sign}");
+            }
+            assert_eq!(state.wheel_key_remainder, [0; 2]);
+        }
+    }
+
+    #[test]
+    fn native_identity_precision_raw_companions_and_metadata_stay_consistent() {
+        let mut snapshot = Arc::new(MotionSnapshot::initial(
+            MouseAxisMap::default(),
+            WheelMask::default(),
+            true,
+        ));
+        let mut state = AxisState::default();
+        let metadata = InputEvent::new(EventType::MISC.0, 4, 101);
+        let unknown_relative = InputEvent::new(EventType::RELATIVE.0, 0x0f, 9);
+        let syn = InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0);
+        for (index, (delta, notches)) in [(60, 0), (60, 1), (300, 2), (60, 1)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut map = MouseAxisMap::default();
+            map.rows[0][0] = if index % 2 == 0 { 1.0 } else { 0.25 };
+            snapshot = snapshot.next(map, snapshot.wheels, true, false);
+            let mut report = vec![
+                metadata,
+                rel(RelativeAxisCode::REL_X, 8),
+                rel(RelativeAxisCode::REL_Y, 4),
+                rel(RelativeAxisCode::REL_WHEEL_HI_RES, delta),
+                rel(RelativeAxisCode::REL_HWHEEL_HI_RES, -delta),
+                unknown_relative,
+                syn,
+            ];
+            if notches != 0 {
+                report.insert(3, rel(RelativeAxisCode::REL_WHEEL, notches));
+                report.insert(4, rel(RelativeAxisCode::REL_HWHEEL, -notches));
+            }
+            let output = routed_report(&mut state, &snapshot, &report, &mut vec![]);
+            assert_eq!(value(&output, RelativeAxisCode::REL_WHEEL_HI_RES), delta);
+            assert_eq!(value(&output, RelativeAxisCode::REL_HWHEEL_HI_RES), -delta);
+            assert_eq!(value(&output, RelativeAxisCode::REL_WHEEL), notches);
+            assert_eq!(value(&output, RelativeAxisCode::REL_HWHEEL), -notches);
+            assert_eq!(
+                value(&output, RelativeAxisCode::REL_X),
+                if index % 2 == 0 { 8 } else { 2 }
+            );
+            assert_eq!(value(&output, RelativeAxisCode::REL_Y), 4);
+            for untouched in [metadata, unknown_relative, syn] {
+                assert_eq!(output.iter().filter(|&&ev| ev == untouched).count(), 1);
+            }
+        }
+        assert_eq!(state.wheel_raw_remainder, [0; 2]);
+        // Without hi-res companions, legacy magnitudes are still normalized once.
+        let output = routed_report(
+            &mut state,
+            &snapshot,
+            &[
+                rel(RelativeAxisCode::REL_WHEEL, 2),
+                rel(RelativeAxisCode::REL_HWHEEL, -3),
+            ],
+            &mut vec![],
+        );
+        assert_eq!(value(&output, RelativeAxisCode::REL_WHEEL_HI_RES), 240);
+        assert_eq!(value(&output, RelativeAxisCode::REL_HWHEEL_HI_RES), -360);
+        assert_eq!(value(&output, RelativeAxisCode::REL_WHEEL), 2);
+        assert_eq!(value(&output, RelativeAxisCode::REL_HWHEEL), -3);
+    }
+
+    #[test]
+    fn legacy_identity_report_keeps_native_routing_but_observes_generation() {
+        let enabled = MotionSnapshot::initial(MouseAxisMap::default(), WheelMask::default(), true);
+        let mut state = AxisState::default();
+        state.observe_snapshot(&enabled);
+        state.wheel_key_remainder = [60; 2];
+        state.wheel_raw_remainder = [60; 2];
+        let legacy = enabled.next(enabled.map, enabled.wheels, false, true);
+        let event = rel(RelativeAxisCode::REL_WHEEL_HI_RES, 60);
+        let mut route =
+            route_axis_report(&mut state, &legacy, &[event], |_| unreachable!()).unwrap();
+        assert!(matches!(route, AxisReportRoute::Legacy));
+        assert!(route.take_axis_output(event).is_none());
+        assert_eq!(state.wheel_key_remainder, [0; 2]);
+        assert_eq!(state.wheel_raw_remainder, [0; 2]);
+    }
+
     #[test]
     fn two_wheels_use_separate_resolution_and_preserve_magnitude() {
         let mut map = MouseAxisMap::default();
@@ -385,7 +580,7 @@ mod axis_tests {
         map.rows[MouseAxis::Y as usize][MouseAxis::V as usize] = -0.25;
         let events = map_axis_report(
             &mut AxisState::default(),
-            &MotionSnapshot::initial(map, WheelMask::default()),
+            &MotionSnapshot::initial(map, WheelMask::default(), true),
             &[
                 rel(RelativeAxisCode::REL_WHEEL, 1),
                 rel(RelativeAxisCode::REL_WHEEL_HI_RES, 120),
@@ -408,7 +603,7 @@ mod axis_tests {
         map.rows[MouseAxis::Rz as usize][MouseAxis::H as usize] = -1.0;
         let events = map_axis_report(
             &mut AxisState::default(),
-            &MotionSnapshot::initial(map, WheelMask::default()),
+            &MotionSnapshot::initial(map, WheelMask::default(), true),
             &[
                 rel(RelativeAxisCode::REL_Z, 3),
                 rel(RelativeAxisCode::REL_DIAL, 1),
@@ -431,7 +626,7 @@ mod axis_tests {
         map.rows[MouseAxis::V as usize][MouseAxis::Y as usize] = -120.0;
         map_axis_report(
             &mut AxisState::default(),
-            &MotionSnapshot::initial(map, WheelMask::new(|_| true)),
+            &MotionSnapshot::initial(map, WheelMask::new(|_| true), true),
             &[
                 rel(RelativeAxisCode::REL_X, 1),
                 rel(RelativeAxisCode::REL_Y, 1),
@@ -453,7 +648,7 @@ mod axis_tests {
         let mut state = AxisState::default();
         let up = map_axis_report(
             &mut state,
-            &MotionSnapshot::initial(map, WheelMask::default()),
+            &MotionSnapshot::initial(map, WheelMask::default(), true),
             &[rel(RelativeAxisCode::REL_WHEEL_HI_RES, 120)],
             |_| unreachable!(),
         )
@@ -462,7 +657,7 @@ mod axis_tests {
         assert_eq!(value(&up, RelativeAxisCode::REL_WHEEL_HI_RES), 0);
         let down = map_axis_report(
             &mut state,
-            &MotionSnapshot::initial(map, WheelMask::default()),
+            &MotionSnapshot::initial(map, WheelMask::default(), true),
             &[rel(RelativeAxisCode::REL_WHEEL_HI_RES, -120)],
             |_| unreachable!(),
         )

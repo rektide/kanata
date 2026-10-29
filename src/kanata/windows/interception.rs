@@ -107,14 +107,13 @@ impl Kanata {
                             {
                                 tx.try_send(KeyEvent::new(ms_mvmt_key, KeyValue::Tap))?;
                             }
-                            if !snapshot.map.is_identity() {
-                                let output = map_mouse_stroke_axes(
-                                    axis_state,
-                                    &snapshot,
-                                    strokes[i],
-                                    |code| MAPPED_KEYS.lock().contains(&code),
-                                    |event| send_key_event(&tx, event),
-                                )?;
+                            if let Some(output) = route_mouse_stroke_axes(
+                                axis_state,
+                                &snapshot,
+                                strokes[i],
+                                |code| MAPPED_KEYS.lock().contains(&code),
+                                |event| send_key_event(&tx, event),
+                            )? {
                                 intrcptn.send(dev, &output);
                                 continue;
                             }
@@ -273,6 +272,21 @@ fn mouse_state_to_event(
 
 /// A stroke can carry motion, buttons and wheel data together. Separate the
 /// mapped components without dropping the other parts of the original stroke.
+fn route_mouse_stroke_axes(
+    axis_state: &mut AxisState,
+    snapshot: &MotionSnapshot,
+    stroke: ic::Stroke,
+    is_mapped: impl Fn(OsCode) -> bool,
+    send_key: impl FnMut(KeyEvent) -> Result<()>,
+) -> Result<Option<Vec<ic::Stroke>>> {
+    axis_state.observe_snapshot(snapshot);
+    if snapshot.pipeline_enabled {
+        map_mouse_stroke_axes(axis_state, snapshot, stroke, is_mapped, send_key).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 fn map_mouse_stroke_axes(
     axis_state: &mut AxisState,
     snapshot: &MotionSnapshot,
@@ -375,6 +389,150 @@ mod axis_tests {
     use crate::kanata::mouse_axis::MouseAxisMap;
 
     #[test]
+    fn native_pipeline_wheel_toggles_keep_partial_and_multiple_key_notches() {
+        for (axis, wheel) in [
+            (MouseAxis::V, ic::MouseState::WHEEL),
+            (MouseAxis::H, ic::MouseState::HWHEEL),
+        ] {
+            for sign in [-1, 1] {
+                for first_identity in [true, false] {
+                    let mut snapshot = Arc::new(MotionSnapshot::initial(
+                        MouseAxisMap::default(),
+                        WheelMask::new(|_| true),
+                        true,
+                    ));
+                    let mut state = AxisState::default();
+                    for (index, (delta, notches)) in
+                        [(60, 0), (60, 1), (300, 2), (60, 1), (0, 0), (0, 0)]
+                            .into_iter()
+                            .enumerate()
+                    {
+                        let mut map = MouseAxisMap::default();
+                        map.rows[0][0] = if (index % 2 == 0) == first_identity {
+                            1.0
+                        } else {
+                            0.25
+                        };
+                        snapshot = snapshot.next(map, snapshot.wheels, true, false);
+                        let mut keys = vec![];
+                        let output = route_mouse_stroke_axes(
+                            &mut state,
+                            &snapshot,
+                            ic::Stroke::Mouse {
+                                state: wheel,
+                                flags: ic::MouseFlags::MOVE_RELATIVE,
+                                rolling: sign * delta,
+                                x: 0,
+                                y: 0,
+                                information: 123,
+                            },
+                            |_| unreachable!("no button data"),
+                            |key| {
+                                keys.push(key);
+                                Ok(())
+                            },
+                        )
+                        .unwrap()
+                        .expect("identity layers must use the same pipeline");
+                        assert!(output.is_empty(), "mapped wheels must not leak raw strokes");
+                        assert_eq!(keys.len(), notches);
+                        assert!(
+                            keys.iter()
+                                .all(|key| key.code == axis.wheel_code(sign > 0).unwrap()
+                                    && key.value == KeyValue::Tap)
+                        );
+                    }
+                    assert_eq!(state.wheel_key_remainder, [0; 2]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_pipeline_identity_keeps_raw_wheel_magnitude_pointer_and_metadata() {
+        let snapshot = MotionSnapshot::initial(MouseAxisMap::default(), WheelMask::default(), true);
+        for rolling in [60, -60, 300, -300] {
+            let output = route_mouse_stroke_axes(
+                &mut AxisState::default(),
+                &snapshot,
+                ic::Stroke::Mouse {
+                    state: ic::MouseState::LEFT_BUTTON_DOWN
+                        | ic::MouseState::WHEEL
+                        | ic::MouseState::HWHEEL,
+                    flags: ic::MouseFlags::MOVE_NO_COALESCE | ic::MouseFlags::ATTRIBUTES_CHANGED,
+                    rolling,
+                    x: 8,
+                    y: 4,
+                    information: 123,
+                },
+                |_| false,
+                |_| unreachable!("unmapped inputs"),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                matches!(output[0], ic::Stroke::Mouse { state, flags, x: 0, y: 0, information: 123, .. }
+                if state == ic::MouseState::LEFT_BUTTON_DOWN && flags.contains(ic::MouseFlags::ATTRIBUTES_CHANGED))
+            );
+            assert!(
+                matches!(output[1], ic::Stroke::Mouse { state, flags, x: 8, y: 4, information: 123, .. }
+                if state.is_empty() && flags == ic::MouseFlags::MOVE_NO_COALESCE)
+            );
+            for wheel in [ic::MouseState::WHEEL, ic::MouseState::HWHEEL] {
+                let total: i32 = output
+                    .iter()
+                    .map(|stroke| match stroke {
+                        ic::Stroke::Mouse {
+                            state,
+                            rolling,
+                            information: 123,
+                            ..
+                        } if state.contains(wheel) => i32::from(*rolling),
+                        _ => 0,
+                    })
+                    .sum();
+                assert_eq!(total, i32::from(rolling));
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_identity_keeps_sign_only_key_routing_and_observes_reload_first() {
+        let enabled =
+            MotionSnapshot::initial(MouseAxisMap::default(), WheelMask::new(|_| true), true);
+        let legacy = enabled.next(enabled.map, enabled.wheels, false, true);
+        let mut state = AxisState::default();
+        state.observe_snapshot(&enabled);
+        state.wheel_key_remainder = [60; 2];
+        let input = ic::Stroke::Mouse {
+            state: ic::MouseState::WHEEL,
+            flags: ic::MouseFlags::MOVE_RELATIVE,
+            rolling: 60,
+            x: 0,
+            y: 0,
+            information: 123,
+        };
+        assert!(
+            route_mouse_stroke_axes(
+                &mut state,
+                &legacy,
+                input,
+                |_| unreachable!(),
+                |_| unreachable!()
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(state.wheel_key_remainder, [0; 2]);
+        for rolling in [60, 240] {
+            let event =
+                mouse_state_to_event(ic::MouseState::WHEEL, rolling, legacy.wheels).unwrap();
+            assert_eq!(event.code, OsCode::MouseWheelUp);
+            assert_eq!(event.value, KeyValue::Tap);
+        }
+    }
+
+    #[test]
     fn relative_zero_flag_and_combined_buttons_do_not_hide_motion() {
         let mut map = MouseAxisMap::default();
         map.rows[MouseAxis::X as usize][MouseAxis::X as usize] = -1.0;
@@ -390,7 +548,7 @@ mod axis_tests {
         let mut keys = vec![];
         let output = map_mouse_stroke_axes(
             &mut AxisState::default(),
-            &MotionSnapshot::initial(map, WheelMask::default()),
+            &MotionSnapshot::initial(map, WheelMask::default(), true),
             input,
             |code| code == OsCode::BTN_LEFT,
             |key| {
@@ -425,7 +583,7 @@ mod axis_tests {
         map.rows[MouseAxis::V as usize][MouseAxis::V as usize] = -1.0;
         let output = map_mouse_stroke_axes(
             &mut AxisState::default(),
-            &MotionSnapshot::initial(map, WheelMask::default()),
+            &MotionSnapshot::initial(map, WheelMask::default(), true),
             ic::Stroke::Mouse {
                 state: ic::MouseState::WHEEL,
                 flags: ic::MouseFlags::MOVE_ABSOLUTE,

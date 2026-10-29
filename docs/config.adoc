@@ -5336,6 +5336,14 @@ that the input device has already combined into one report delta.
 - Transformed wheel directions listed in `defsrc`/`deflayermap` become key
   taps at full-notch boundaries. Unmapped directions retain high-resolution
   deltas. Mixed inputs are summed before quantization and key-tap generation.
+- A non-identity global map or any numeric layer program enables this analog
+  accounting for the entire configuration, including layers whose effective map
+  is identity. Both wheels keep partial-notch credit and multi-notch magnitudes
+  through pointer-only layer changes; Linux also generates consistent legacy
+  companion wheel events. With an identity global map and no numeric programs,
+  legacy native routing is unchanged (empty/null-only programs do not opt in).
+  A global-only non-identity map already uses analog accounting. LLHOOK can still
+  pass untouched pointer movement natively while accounting for wheels this way.
 - Linux transforms complete input reports and deduplicates legacy/high-resolution
   wheel data separately for each wheel. A non-identity mapping enables `any`
   device detection by default; explicit detection settings and include/exclude
@@ -5343,9 +5351,10 @@ that the input device has already combined into one report delta.
 - Windows Interception supports X/Y/V/H with native relative deltas. It preserves
   the other components of combined button/movement/wheel strokes. Adding mouse
   interception or movement interception after startup requires a restart.
-- Windows LLHOOK supports X/Y/V/H using block/re-inject. It retains partial and
-  multiple wheel notches. Cursor movement uses screen-position differences,
-  so screen edges and other cursor repositioning can limit it; applications
+- Windows LLHOOK supports X/Y/V/H using block/re-inject. Axis-enabled configurations
+  retain partial and multiple wheel notches even on identity layers. Cursor movement
+  uses screen-position differences, so screen edges and other cursor repositioning
+  can limit it; applications
   reading Raw Input can still see physical events. Interception is preferable
   for raw movement mapping. If the mouse hook was absent at startup, restart
   to enable it.
@@ -5527,7 +5536,7 @@ A discrete change resets fractions only for outputs whose final row changed
 raw and mapped-key notch remainders. Pointer-only precision preserves unchanged
 wheel credit. Reset epochs remember processed A->B->A changes even if no input
 report arrived in between. Numerically equal final rows do not reset merely
-because provenance changed. Every successful reload resets *all* motion state,
+because provenance changed. Every successful reload resets *all* analog motion state,
 including equal maps; old fractional credit is not restored on release.
 
 ===== Capture, checking and reload

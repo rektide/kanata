@@ -30,6 +30,75 @@ fn key(k: &mut Kanata, code: OsCode, value: KeyValue) {
 }
 
 #[test]
+fn native_pipeline_policy_follows_declarations_not_current_map_and_resets_on_reload() {
+    let _lock = crate::tests::CFG_PARSE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for (cfg, enabled) in [
+        ("(defsrc) (deflayer base)", false),
+        (
+            "(defcfg mouse-axis-map ((x (x 1)))) (defsrc) (deflayer base)",
+            false,
+        ),
+        (
+            "(defsrc) (deflayer (base mouse-axis ((set (cell x y null)))))",
+            false,
+        ),
+        (
+            "(defcfg mouse-axis-map ((x (x 0.5)))) (defsrc) (deflayer base)",
+            true,
+        ),
+        (
+            "(defsrc) (deflayer base) (deflayer (inactive mouse-axis ((add (cell x y 0)))))",
+            true,
+        ),
+        (
+            "(defsrc) (deflayer base) (deflayer (inactive mouse-axis ((compose-output (factor (from x) (to x) (values (1)))))))",
+            true,
+        ),
+    ] {
+        let k = new(cfg);
+        assert_eq!(snapshot(&k).pipeline_enabled, enabled, "{cfg}");
+    }
+
+    let enabled = "(defsrc) (deflayer base) (deflayer (precision mouse-axis ((mul-elements (scalar 0.25 (outputs x y))))))";
+    let mut k = new(enabled);
+    let base = snapshot(&k);
+    assert!(base.map.is_identity() && base.pipeline_enabled);
+    k.layout.bm().set_default_layer(1);
+    k.tick_ms(0, &None).unwrap();
+    let precision = snapshot(&k);
+    assert!(!precision.map.is_identity() && precision.pipeline_enabled);
+    assert_eq!(
+        precision.output_epochs[MouseAxis::V as usize],
+        base.output_epochs[MouseAxis::V as usize]
+    );
+    assert_eq!(
+        precision.output_epochs[MouseAxis::H as usize],
+        base.output_epochs[MouseAxis::H as usize]
+    );
+
+    let mut device = AxisState::default();
+    device.observe_snapshot(&precision);
+    device.wheel_key_remainder = [60; 2];
+    device.wheel_raw_remainder = [60; 2];
+    for (cfg, expected_enabled) in [("(defsrc) (deflayer base)", false), (enabled, true)] {
+        let old = snapshot(&k);
+        let candidate = kanata_parser::cfg::new_from_str(cfg, Default::default()).unwrap();
+        k.install_config(candidate, &None).unwrap();
+        let current = snapshot(&k);
+        assert_eq!(current.pipeline_enabled, expected_enabled);
+        assert!(current.map.is_identity());
+        assert_eq!(current.generation, old.generation + 1);
+        device.observe_snapshot(&current);
+        assert_eq!(device.wheel_key_remainder, [0; 2]);
+        assert_eq!(device.wheel_raw_remainder, [0; 2]);
+        device.wheel_key_remainder = [30; 2];
+        device.wheel_raw_remainder = [30; 2];
+    }
+}
+
+#[test]
 fn full_stack_handles_lower_release_duplicate_priority_defaults_and_no_drift() {
     let _lock = crate::tests::CFG_PARSE_LOCK
         .lock()
