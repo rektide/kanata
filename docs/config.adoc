@@ -5370,6 +5370,8 @@ duplicating another channel.
 
 For prospective Linux device-qualified routing and multiple virtual outputs,
 see link:../design/mouse-axis/linux-flexibility0.gpt6a.md[the Linux flexibility design].
+The link:../design/mouse-axis/README.md[transform design reading map] also records
+the current layer-inheritance question and deferred animation desire.
 
 [[linux-only-linux-dev]]
 === Linux only: linux-dev

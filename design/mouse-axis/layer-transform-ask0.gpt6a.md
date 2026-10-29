@@ -135,6 +135,8 @@ animation: resetting on every animated coefficient update could prevent small
 deltas from ever accumulating into output. The correct state policy remains a
 design question, not a reason to begin implementing animation now.
 
+<a id="animation-desire"></a>
+
 ## Animation desire — deferred
 
 Preserve this as an opportunity after layer semantics become clear. The human
